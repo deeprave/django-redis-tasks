@@ -9,21 +9,31 @@ authors = [
     { name = "David Nugent", email = "davidn@uniquode.io" }
 ]
 classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: BSD License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Environment :: Web Environment",
+    "Framework :: Django",
+    "Framework :: Django :: 5.0",
+    "Framework :: Django :: 5.1",
 ]
 dependencies = [
     "django>=5.1.4",
-    "django_tasks",
+    "django_tasks>=0.6.1",
 ]
 
-[tool.uv.sources]
-django_tasks = { path = "/Users/davidn/Projects/Django/django-tasks" }
-
-[tool.flit.module]
-name = "redis_tasks"
+[project.urls]
+Source = "https://github.com/deeprave/django-redis-tasks"
+Issues = "https://github.com/deeprave/django-redis-tasks/issues"
+Changelog = "https://github.com/deeprave/django-redis-tasks/releases"
 
 [tool.pytest.ini_options]
 minversion = "8.0"
+asyncio_default_fixture_loop_scope = "function"
 pythonpath = ["."]
 testpaths = ["tests"]
 
@@ -42,6 +52,5 @@ redis = [
 default-groups = ["dev", "redis"]
 
 [build-system]
-requires = ["flit-core"]
-build-backend = "flit_core.buildapi"
-
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"

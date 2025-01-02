@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from enum import Enum
 import json
 import uuid
@@ -69,11 +70,15 @@ class RedisTaskQueue:
         self._queue_name = options.get("queue_name", "task_queue")
         self._default_ttl = int(options.get("ttl", DEFAULT_TTL))
         self._encoding = options.get("encoding", "utf-8")
-        try:
-            asyncio.get_running_loop()
-            async_to_sync(register_queue)(self.queue_name, self)
-        except RuntimeError:
-            register_queue(self.queue_name, self)
+
+        async def call_register_queue():
+            await register_queue(self.queue_name, self)
+
+        with contextlib.suppress(RuntimeError):
+            if asyncio.get_running_loop().is_running():
+                asyncio.create_task(call_register_queue())
+                return
+        asyncio.run(call_register_queue())
 
     @property
     def redis(self):
@@ -170,15 +175,15 @@ class RedisTaskQueue:
         local ready_queue = KEYS[2]
         local processing_queue = KEYS[3]
         local task_store_key = KEYS[4]
-    
+
         -- Get the current timestamp
         local current_time = tonumber(ARGV[2])
-    
+
         -- Check the waiting queue for tasks that are ready to run
         local ready_tasks = redis.call('zrangebyscore', waiting_queue, '-inf', current_time, 'LIMIT', 0, 1)
         if #ready_tasks > 0 then
             local task_key = ready_tasks[1] -- Select the highest-priority task in the waiting queue
-    
+
             -- Retrieve the task details
             local task_data = redis.call('get', task_store_key:format(task_key))
             -- And remove it
@@ -189,7 +194,7 @@ class RedisTaskQueue:
                 return {task_key, task_data}
             end
         end
-    
+
         -- Check the ready queue for tasks
         local task_key = redis.call('zrevrange', ready_queue, 0, 0)[1]
         if task_key then

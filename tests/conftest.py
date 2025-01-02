@@ -8,7 +8,7 @@ from redis_tasks.backend import RedisBackend
 
 @pytest.fixture(scope="module")
 def redis_client() -> redis.Redis:
-    with RedisContainer() as redis_container:
+    with RedisContainer("redis:latest") as redis_container:
         yield redis_container.get_client()
 
 

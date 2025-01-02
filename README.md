@@ -1,98 +1,88 @@
-# Django Queue
+from tests.settings import INSTALLED_APPS
 
-This is an implementation of message queues for Django.
+# Django Redis Tasks
 
-## Message Queues
+This is an implementation of django tasks using a Redis backend.
 
-What are message queues? In Django, message queues enable independent and decoupled communication between parts of an
-application or with external systems. For instance, one app can generate messages for another app to consume, avoiding
-direct dependencies. This module implements a simple mechanism where a sender publishes messages, and consumers read and
-remove them from the queue.
+## django-tasks
 
-This module supports various queue types: first-in-first-out (FIFO), last-in-first-out (LIFO or stacks), and priority
-queues, where messages with higher priority are consumed before lower-priority ones, regardless of their addition order.
+This is an backend implementation for the [django-tasks](https://github.com/RealOnangeOne/django-tasks) module as defined in
+[DEP 0014](https://github.com/django/deps/blob/main/accepted/0014-background-workers.rst).
 
-## Implementation
+It uses a redis store for task queues and storing the results of tasks, fully supports both sychronous functions and async
+coroutines.
 
-This module currently implements two types of queues. Both use the same interface and are, to some extent,
-interchangeable:
+A limitation of this first implementation are:
 
-- **memory queues**: non-persistent and available only while the application is running.
-- **redis queues**: persistent queues backed by a Redis server.
+- tasks are currently run sequentially until completion, meaning that long or forever running tasks may block subsequent
+  tasks until they are completed. This will be corrected.
+- while `run_after` is supported, currently there is no scheduling support.
+
+The majority of the redis backed queue runs in async mode, and the async task runner is automatically started on when the
+Django server starts.
+
+
+## Installation
+```shell
+  pip install django-redis-tasks
+```
+```shell
+  poetry add django-redis-tasks
+```
+```shell
+  uv add django-redis-tasks
+```
+etc.
 
 ## Configuration
 
-Queues are configured in the Django settings module, and use a simple and familiar configuration format like **DATABASES** and **CACHES**.
-
-Example
-
+Both `django_tasks` and `redis_tasks` need to be added to `INSTALLED_APPS`.
 ```python
-QUEUES = {
-    "default": {
-        "BACKEND": "django_queue.backends.RedisQueueJson",
-        "LOCATION": f"redis://localhost:6379/12",
-        "maxsize": 64,
-    },
-}
-
+INSTALLED_APPS = [
+    ...
+    "django_tasks",
+    "redis_tasks",
+    ...
+]
 ```
 
-The above configures the queue backend to be redis, storing FIFO data in JSON format.
+Django tasks are configured in the Django settings module, and use a simple and familiar configuration format similar to **DATABASES** and **CACHES**.
 
-To implement a stack (FILO), the `django_queue.backends.RedisStackJson` can be used instead, or a `"stack": True` option added to the options.
+Example.
+
+```python
+TASKS = {
+    "default": {
+        "BACKEND": "redis_tasks.backend.RedisBackend",      # specify the backend for django.tasks
+        "LOCATION": f"redis://localhost:6379/12",           # set the redis connection url and database
+        "maxsize": 64,                                      # set the maximum number of tasks that can be queued
+        "ttl": 3600,                                        # tasks are dispatched within the specified seconds, else they expire
+        "queue_name": "task_queue",                         # set the queue name for this instance
+    },
+}
+```
+
+A Django server may support any number of task backends and should work alongside other types of backend, or multiple additional RedisBackend instances
+using different queue_names.
+The task runner iterates and dispatches tasks from all the registered redis tasks queues.
+Tasks may select the queue or backend instance eligible to run them as outlined in the django-tasks documentation, otherwise they are added to the `default` backend.
+By default, backend names are the alias assigned to them in the above configuration.
 
 ## Usage
 
-Within an application, data is added to the queue by using the `add` method:
-
-Example
-
+A task is created using the @task decorator:
 ```python
-from django_queue import queue
-...
-   queue.add({"some": "object", "with": "values"})
-...
+from django_tasks import task
+
+
+@task()
+def calculate_meaning_of_life() -> int:
+    return 42
+
+
+@task(priority=10, queue_name="alternate")
+async def nudge_nudge_wink_wink() -> list[str]:
+    return ["say", "no", "more"]
 ```
 
-Priority queues require slightly different handling in that a priority should be set to determine the order in which messages are consumed and when added should be done as a `(priority, value)` tuple:
-
-```python
-from django_queue import queue
-...
-   queue.add((10, {"some": "object", "with": "values"}))
-...
-```
-
-Multiple values can be added in the one `add()` call if required.
-
-With all queues, the `get()`, `peek()` and `pull()` methods returns the object. With priority queues the priority is only used with and relevant to `add()`.
-
-## Queue Interface
-
-All queues conform to the following interface:
-
-#### Properties
-
-- stack: returns True if the queue is a stack (LIFO) otherwise it is FIFO or priority based
-- capacity: returns the queue capacity, 0 for unlimited
-
-#### Methods
-
-- add(item1[, item2, item3 ...]): add one or more items to the queue. With priority queues, items can be passed as `(priority, item)` tuples, although if not a tuple the default priority of 0 is defined. Priorities are evaluated as higher values = high priority, lower values = low priority. Priority can be positive or negative with 0 considered "normal".
-- get(): retrieve and remove the next item from the queue.
-- poll(): same as get(), but blocks if no item is available.
-- peek(): retrieve but not remove the next item in the queue.
-- size(): returns the number of items currently in the queue. `len(queue)` also returns this value.
-- is_empty(): returns true if there are no items currently in the queue.
-- clear(): remove all items from the queue.
-- close(): closes and destroys the queue.
-- the queue itself can be used in the context of a boolean: True if there are items in the queue else False.
-
-#### Exceptions
-
-- InvalidQueueBackendError: this indicates an issue with the Django QUEUES configuration.
-- QueueFullException: operation (addition) attempted on a queue that has reached capacity
-- QueueEmptyException: operation (get, peek or timed out poll) accepted on an empty queue
-- QueueEncodingException: error occurred in encoding the item
-- QueueValueError: error occurred in decoding an item
-
+> Note that currently the enqueue_on_commit task parameter is ignored.
