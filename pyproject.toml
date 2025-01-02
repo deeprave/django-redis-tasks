@@ -1,0 +1,47 @@
+[project]
+name = "django-redis-tasks"
+version = "0.1.0"
+description = "Django tasks backend using Redis queues"
+readme = "README.md"
+license = { file = "LICENSE.md" }
+requires-python = ">=3.11"
+authors = [
+    { name = "David Nugent", email = "davidn@uniquode.io" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "django>=5.1.4",
+    "django_tasks",
+]
+
+[tool.uv.sources]
+django_tasks = { path = "/Users/davidn/Projects/Django/django-tasks" }
+
+[tool.flit.module]
+name = "redis_tasks"
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest-mock>=3.14.0",
+    "pytest>=8.3.4",
+    "testcontainers>=4.9.0",
+    "pytest-asyncio>=0.25.0",
+]
+redis = [
+    "redis>=5.2.1",
+]
+
+[tool.uv]
+default-groups = ["dev", "redis"]
+
+[build-system]
+requires = ["flit-core"]
+build-backend = "flit_core.buildapi"
+

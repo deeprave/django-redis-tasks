@@ -1,0 +1,10 @@
+*.egg-info
+dist
+__pycache__
+*.py[cod]
+.*_cache
+/.venv/
+/.idea
+.coverage
+.idea/
+.vscode/
