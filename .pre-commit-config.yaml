@@ -6,7 +6,7 @@ repos:
     rev: v5.0.0
     hooks:
       - id: no-commit-to-branch
-        args: ['--branch', 'mainx']
+        args: ['--branch', 'main']
       - id: end-of-file-fixer
       - id: trailing-whitespace
       - id: check-yaml
