@@ -8,3 +8,8 @@ __pycache__
 .coverage
 .idea/
 .vscode/
+.claude
+.codex
+.cursor
+.kiro
+.pi

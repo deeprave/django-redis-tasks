@@ -1,101 +1,238 @@
-from typing import Any, Dict
-from django_tasks import Task, TaskResult, ResultStatus
-from django_tasks.backends.base import BaseTaskBackend
-from django_tasks.exceptions import ResultDoesNotExist
+import builtins
+import uuid
+from typing import Any, cast
 
-from .utils import deserialise_function, utc_datetime
-from .taskqueue import RedisTaskQueue, TaskState
+import django_queue
+from django.core.exceptions import ImproperlyConfigured
+from django.tasks.backends.base import BaseTaskBackend
+from django.tasks.base import Task, TaskError, TaskResult, TaskResultStatus
+from django.tasks.exceptions import TaskResultDoesNotExist
+from django.tasks.signals import task_enqueued
+from django.utils.json import normalize_json
+from django.utils.module_loading import import_string
+from django_queue.backends.base import AsyncQueue
+from django_queue.backends.exceptions import QueueEntryNotFoundError
+from django_queue.backends.redis.redisqueue import RedisAsyncQueue
+from django_queue.entries import QueueEntryStatus
+
+from redis_tasks.entries import TaskQueueEntry
+
+_STATUS_MAP = {
+    QueueEntryStatus.QUEUED: TaskResultStatus.READY,
+    QueueEntryStatus.RUNNING: TaskResultStatus.RUNNING,
+    QueueEntryStatus.SUCCEEDED: TaskResultStatus.SUCCESSFUL,
+    QueueEntryStatus.FAILED: TaskResultStatus.FAILED,
+    QueueEntryStatus.TIMEOUT: TaskResultStatus.FAILED,
+    QueueEntryStatus.CANCELLED: TaskResultStatus.FAILED,
+}
 
 
-def result_status(value) -> ResultStatus | None:
-    if not isinstance(value, TaskState):
-        value = TaskState.value_of(value)
-    match value:
-        case TaskState.READY:
-            return ResultStatus.NEW
-        case TaskState.PROCESSING:
-            return ResultStatus.RUNNING
-        case TaskState.COMPLETED:
-            return ResultStatus.SUCCEEDED
-        case TaskState.FAILED, TaskState.TIMEOUT:
-            return ResultStatus.FAILED
-    return None
+def task_from_payload(
+    payload: dict[str, Any], backend_alias: str, *, allow_missing: bool = False
+) -> Task:
+    try:
+        imported = import_string(payload["func"])
+    except ImportError, AttributeError:
+        if not allow_missing:
+            raise
+        module_name, _, function_name = payload["func"].rpartition(".")
+
+        if payload.get("takes_context", False):
+
+            def unavailable_task(context: Any, *args: Any, **kwargs: Any) -> None:
+                raise ImportError(
+                    f"Task function {payload['func']!r} is no longer importable"
+                )
+
+        else:
+
+            def unavailable_task(*args: Any, **kwargs: Any) -> None:
+                raise ImportError(
+                    f"Task function {payload['func']!r} is no longer importable"
+                )
+
+        unavailable_task.__module__ = module_name
+        unavailable_task.__name__ = function_name
+        unavailable_task.__qualname__ = function_name
+        imported = unavailable_task
+    return Task(
+        func=imported.func if isinstance(imported, Task) else imported,
+        priority=payload.get("priority", 0),
+        backend=payload.get("backend", backend_alias),
+        queue_name=payload.get("queue_name", "default"),
+        takes_context=payload.get("takes_context", False),
+    )
+
+
+def task_result_from_entry(
+    task: Task, entry: TaskQueueEntry, backend_alias: str
+) -> TaskResult:
+    status = _STATUS_MAP[entry.status]
+    if entry.error is not None:
+        exception_name = entry.error["type"]
+        exception_class_path = (
+            f"builtins.{exception_name}"
+            if isinstance(getattr(builtins, exception_name, None), type)
+            and issubclass(getattr(builtins, exception_name), BaseException)
+            else "builtins.Exception"
+        )
+        errors = [
+            TaskError(
+                exception_class_path=exception_class_path,
+                traceback=entry.error["message"],
+            )
+        ]
+    elif entry.status == QueueEntryStatus.TIMEOUT:
+        errors = [
+            TaskError(
+                exception_class_path="builtins.TimeoutError",
+                traceback="Task execution timed out.",
+            )
+        ]
+    elif entry.status == QueueEntryStatus.CANCELLED:
+        errors = [
+            TaskError(
+                exception_class_path="asyncio.exceptions.CancelledError",
+                traceback="Task execution was cancelled.",
+            )
+        ]
+    else:
+        errors = []
+    result = TaskResult(
+        task=task,
+        id=str(entry.id),
+        status=status,
+        enqueued_at=entry.queued_at.to_datetime() if entry.queued_at else None,
+        started_at=entry.dispatched_at.to_datetime() if entry.dispatched_at else None,
+        finished_at=entry.finished_at.to_datetime() if entry.finished_at else None,
+        last_attempted_at=entry.dispatched_at.to_datetime()
+        if entry.dispatched_at
+        else None,
+        args=entry.payload.get("args", []),
+        kwargs=entry.payload.get("kwargs", {}),
+        backend=backend_alias,
+        errors=errors,
+        worker_ids=entry.worker_ids,
+    )
+    if status == TaskResultStatus.SUCCESSFUL:
+        object.__setattr__(result, "_return_value", entry.result)
+    return result
+
+
+def task_payload(task: Task, args: list, kwargs: dict) -> dict[str, Any]:
+    return {
+        "func": task.module_path,
+        "args": normalize_json(list(args)),
+        "kwargs": normalize_json(kwargs),
+        "takes_context": task.takes_context,
+        "backend": task.backend,
+        "queue_name": task.queue_name,
+        "priority": task.priority,
+    }
 
 
 class RedisBackend(BaseTaskBackend):
-    queue_class = RedisTaskQueue
-    supports_defer = True  # Tasks can be enqueued with the run_after attribute
-    supports_async_task = True  # Coroutines be enqueued
-    supports_get_result = True  # Results can be retrieved after the fact (from **any** thread / process)
+    supports_async_task = True
+    supports_get_result = True
+    supports_defer = False
+    supports_priority = True
 
-    def __init__(self, alias: str, params: Dict[str, Any]) -> None:
-        """
-        Any connections which need to be set up can be done here
-        """
-
-        self._queue_class = params.pop("queue_class", self.queue_class)
-        self._location = params.pop("location", "redis://localhost:6379/0")
-        self._params = {}
-        for k in ("queue_name", "ttl", "encoding"):
-            v = params.pop(k, None)
-            if v is not None:
-                self._params[k] = v
-        self._task_queue = None  # lazy
+    def __init__(self, alias: str, params: dict[str, Any]) -> None:
+        self._queue_alias = (params.get("OPTIONS") or {}).get("queue_alias", alias)
         super().__init__(alias=alias, params=params)
+        if not isinstance(self._queue_alias, str) or not self._queue_alias:
+            raise ImproperlyConfigured(
+                "Redis task backend OPTIONS.queue_alias must be a non-empty string."
+            )
+        if self._queue_alias not in django_queue.queues.settings:
+            raise ImproperlyConfigured(
+                f"Redis task backend queue_alias {self._queue_alias!r} is not "
+                "configured in QUEUES."
+            )
+        try:
+            queue_backend = import_string(
+                django_queue.queues.settings[self._queue_alias]["BACKEND"]
+            )
+            is_redis_queue = issubclass(queue_backend, RedisAsyncQueue)
+        except (ImportError, AttributeError, TypeError) as exc:
+            raise ImproperlyConfigured(
+                f"Redis task backend queue_alias {self._queue_alias!r} must use a "
+                "RedisAsyncQueue-compatible backend."
+            ) from exc
+        if not is_redis_queue:
+            raise ImproperlyConfigured(
+                f"Redis task backend queue_alias {self._queue_alias!r} must use a "
+                "RedisAsyncQueue-compatible backend."
+            )
+        entry_class = django_queue.queues.settings[self._queue_alias].get("ENTRY_CLASS")
+        if isinstance(entry_class, str):
+            entry_class = import_string(entry_class)
+        if not isinstance(entry_class, type) or not issubclass(
+            entry_class, TaskQueueEntry
+        ):
+            raise ImproperlyConfigured(
+                f"Redis task backend queue_alias {self._queue_alias!r} must "
+                "configure an ENTRY_CLASS compatible with TaskQueueEntry."
+            )
+        worker_class = django_queue.queues.settings[self._queue_alias].get("WORKER")
+        if isinstance(worker_class, str):
+            worker_class = import_string(worker_class)
+        from redis_tasks.worker import RedisTaskWorker
 
-    @property
-    def queue(self) -> RedisTaskQueue:
-        if not self._task_queue:
-            self._task_queue = self.queue_class(self._location, self._params)
-        return self._task_queue
+        if not isinstance(worker_class, type) or not issubclass(
+            worker_class, RedisTaskWorker
+        ):
+            raise ImproperlyConfigured(
+                f"Redis task backend queue_alias {self._queue_alias!r} must "
+                "configure a WORKER compatible with RedisTaskWorker."
+            )
 
-    def _redis_to_taskresult(self, task: Task, qtask) -> TaskResult:
-        result = TaskResult(
-            task=task,
-            id=qtask.task_key,
-            status=result_status(qtask.state),
-            enqueued_at=utc_datetime(qtask.enqueued_at),
-            started_at=utc_datetime(qtask.started_at),
-            finished_at=utc_datetime(qtask.finished_at),
-            args=qtask.args,
-            kwargs=qtask.kwargs,
-            backend=self.alias,
-        )
-        if result.is_finished:
-            for attribute in ("exception_class", "traceback", "return_value"):
-                setattr(result, f"_{attribute}", getattr(qtask, attribute, None))
+    def _resolve_queue(self) -> AsyncQueue:
+        return django_queue.queues[self._queue_alias]
+
+    def enqueue(self, task: Task, args: list, kwargs: dict) -> TaskResult:
+        self.validate_task(task)
+        payload = task_payload(task, args, kwargs)
+        queue = self._resolve_queue()
+        entry_id = queue.enqueue(payload, priority=task.priority)
+        entry = queue.find(entry_id)
+        result = task_result_from_entry(task, cast(TaskQueueEntry, entry), self.alias)
+        task_enqueued.send(type(self), task_result=result)
         return result
 
-    def enqueue(self, task: Task, *args, **kwargs) -> TaskResult:
-        """
-        Queue up a task to be executed
-        """
+    async def aenqueue(self, task: Task, args: list, kwargs: dict) -> TaskResult:
         self.validate_task(task)
+        payload = task_payload(task, args, kwargs)
+        queue = self._resolve_queue()
+        entry_id = await queue.aenqueue(payload, priority=task.priority)
+        entry = await queue.afind(entry_id)
+        result = task_result_from_entry(task, cast(TaskQueueEntry, entry), self.alias)
+        await task_enqueued.asend(type(self), task_result=result)
+        return result
 
-        qtask = self.queue.add_task(task.func, *args, priority=task.priority, run_after=task.run_after, **kwargs)
-        return self._redis_to_taskresult(task, qtask)
+    def get_result(self, result_id: str) -> TaskResult:
+        try:
+            entry_id = uuid.UUID(result_id)
+        except (ValueError, AttributeError, TypeError) as exc:
+            raise TaskResultDoesNotExist(result_id) from exc
+        try:
+            entry = self._resolve_queue().find(entry_id)
+        except QueueEntryNotFoundError as exc:
+            raise TaskResultDoesNotExist(result_id) from exc
+        task = task_from_payload(entry.payload, self.alias, allow_missing=True)
+        return task_result_from_entry(task, cast(TaskQueueEntry, entry), self.alias)
 
-    def get_result(self, task_key: str) -> TaskResult:
-        """
-        Retrieve a result by its id (if one exists).
-        If one doesn't, raises ResultDoesNotExist.
-        """
-        if qtask := self.queue.get_task_status(task_key):
-            return self._redis_to_taskresult(
-                Task(
-                    priority=qtask.priority,
-                    func=deserialise_function(qtask.fn),
-                    backend=self.alias,
-                    queue_name=self.queue.queue_name,
-                    run_after=qtask.run_after,
-                    enqueue_on_commit=False,
-                ),
-                qtask
-            )
-        raise ResultDoesNotExist(f"task_id = {task_key}")
+    async def aget_result(self, result_id: str) -> TaskResult:
+        try:
+            entry_id = uuid.UUID(result_id)
+        except (ValueError, AttributeError, TypeError) as exc:
+            raise TaskResultDoesNotExist(result_id) from exc
+        try:
+            entry = await self._resolve_queue().afind(entry_id)
+        except QueueEntryNotFoundError as exc:
+            raise TaskResultDoesNotExist(result_id) from exc
+        task = task_from_payload(entry.payload, self.alias, allow_missing=True)
+        return task_result_from_entry(task, cast(TaskQueueEntry, entry), self.alias)
 
-    def close(self) -> None:
-        """
-        Close any connections opened as part of the constructor
-        """
-        self.queue.clear_tasks()
+    def _entry_to_result(self, task: Task, entry: TaskQueueEntry) -> TaskResult:
+        return task_result_from_entry(task, entry, self.alias)
