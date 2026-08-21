@@ -1,0 +1,55 @@
+name: Test and Build
+description: Set up Python, run repository checks, and build the package with uv.
+
+inputs:
+  python-version:
+    description: Python version to use.
+    required: true
+  sync-args:
+    description: Extra arguments to pass to uv sync.
+    required: false
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v6.2.0
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Setup uv
+      uses: astral-sh/setup-uv@v9.0.0
+      with:
+        version: latest
+
+    - name: Install dependencies
+      shell: bash
+      run: uv sync --locked ${{ inputs.sync-args }}
+
+    - name: Lint
+      shell: bash
+      run: uv run ruff check .
+
+    - name: Check formatting
+      shell: bash
+      run: uv run ruff format --check .
+
+    - name: Check types
+      shell: bash
+      run: uv run ty check
+
+    - name: Audit dependencies
+      shell: bash
+      run: uvx osvcheck
+
+    - name: Validate pyproject
+      shell: bash
+      run: uvx --with "packaging>=24.2" validate-pyproject pyproject.toml
+
+    - name: Run tests
+      shell: bash
+      run: uv run pytest -Walways -Werror
+
+    - name: Build package
+      shell: bash
+      run: uv build
