@@ -21,12 +21,12 @@ initialized during app setup, and executed separately by `manage.py runqueues`.
 
 The projects will be split into two layers:
 
-1. `django-queue` will be the generic queue and worker layer. It will provide
+1. `django-queues` will be the generic queue and worker layer. It will provide
    named queue namespaces, generated identifiers for enqueued items, queue-item
    lifecycle metadata, and an asynchronous worker that dispatches queued items
    until it is cancelled.
 2. `django-redis-tasks` will be a Django 6 task backend. It will depend on
-   `django-queue` for queueing and worker lifecycle, and will translate Django
+   `django-queues` for queueing and worker lifecycle, and will translate Django
    task payloads and results to and from that generic layer.
 
 Redis workers provide **at-least-once delivery**. A worker claims an entry with
@@ -36,7 +36,7 @@ automatically recovered to the queued state. A worker crash can therefore cause
 an entry to execute again, but cannot silently discard in-flight work; handlers
 must be idempotent where duplicate side effects matter.
 
-`django-queue` remains useful independently of Django tasks: application code
+`django-queues` remains useful independently of Django tasks: application code
 can enqueue generic dictionary payloads and run independent consumers.
 
 Both projects will require Python 3.14 or later. Queue item identifiers will be
@@ -51,7 +51,7 @@ fallback clock source.
 ## Consequences
 
 - The in-package `redis_tasks.runqueue` runner will be removed or replaced by
-  the `django-queue` worker API rather than evolved independently.
+  the `django-queues` worker API rather than evolved independently.
 - Django application startup validates and initializes queue services but does
   not start a worker; `manage.py runqueues` owns worker lifecycle externally.
 - `django-redis-tasks` will target `django.tasks` from Django 6 and will remove
