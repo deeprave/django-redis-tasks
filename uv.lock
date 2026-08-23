@@ -139,15 +139,15 @@ wheels = [
 
 [[package]]
 name = "django-queues"
-version = "1.0.3"
+version = "1.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "asgiref" },
     { name = "django" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/16/a0/85daca59406d9967f6625ef2cf245a3fdf9b0531ba7759be61c3ecf4e379/django_queues-1.0.3.tar.gz", hash = "sha256:2bd9d4e2609175b81696921a45840130f3853be88963e17a37e046c1790782f5", size = 77623, upload-time = "2026-08-20T11:36:06.001Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/45/3e/59bf3ed673082dbb667e5f44dcdbfbf6a948a810fff776d61de975784a46/django_queues-1.2.0.tar.gz", hash = "sha256:d65f705a5462b3ad644c4f31181a1e6377e8443196edab97f64917d534102634", size = 84364, upload-time = "2026-08-23T09:26:09.279Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/26/7e/a19cd280950bdc3e93db3ee39fd1b975b881b373fe6ea6715a04256fd2ce/django_queues-1.0.3-py3-none-any.whl", hash = "sha256:dde1ca1e54491bfcf2a340e91ca9adf8e4412b6f6abd8f44ea590099ec70703d", size = 81654, upload-time = "2026-08-20T11:36:04.997Z" },
+    { url = "https://files.pythonhosted.org/packages/33/e4/150c3dedbdeb897bd5e24bcf7673630ab6d4d5973f16bb2c5bfe4824f52b/django_queues-1.2.0-py3-none-any.whl", hash = "sha256:3949689f642c978322b765edc8045e98b411a5dec8fa1038bebd2c5ee596453e", size = 89141, upload-time = "2026-08-23T09:26:08.108Z" },
 ]
 
 [package.optional-dependencies]
@@ -157,7 +157,7 @@ redis = [
 
 [[package]]
 name = "django-redis-tasks"
-version = "1.0.0a1"
+version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "django" },
@@ -177,7 +177,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "django", specifier = ">=6.1" },
-    { name = "django-queues", extras = ["redis"], specifier = ">=1.0.3,<2.0.0" },
+    { name = "django-queues", extras = ["redis"], specifier = ">=1.2.0,<2.0.0" },
 ]
 
 [package.metadata.requires-dev]

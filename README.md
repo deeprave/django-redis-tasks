@@ -20,10 +20,24 @@ vocabulary (`Task`, `TaskResult`, `TaskResultStatus`) onto `django-queues`' gene
 This package does not manage Redis connections, run a worker loop, or start anything during Django's application
 startup — `django-queues` owns all of that, including its `manage.py runqueues` management command.
 
-## Limitations
+## Deferred tasks
 
-- **`run_after` (deferred tasks) is not supported.** `django-queues`' entry-tracked enqueue API has no delay-until
-  primitive, only an execution-timeout budget. A task enqueued with `run_after` set is rejected.
+`run_after` is supported. The backend normalizes the datetime to UTC at enqueue: that UTC instant is stored on the task payload and passed to django-queues as `available_at`. Reconstruction therefore does not depend on the reader's `USE_TZ` or `TIME_ZONE`. Redis TIME decides when the entry becomes claimable; workers do not record an attempt or emit started/finished signals while the task is only waiting.
+
+- **Aware datetimes** are converted to UTC.
+- **Naive datetimes** are accepted only when `USE_TZ` is `False`; they are interpreted in Django's current timezone, then converted to UTC. When `USE_TZ` is `True`, Django rejects a naive `run_after` at enqueue. Legacy naive payload values are still normalized to UTC on read.
+- A past or current `run_after` is eligible for dispatch immediately.
+- A worker that has no due work waits until a deferred task becomes due; it does not busy-poll the application clock.
+
+## Redis runtime
+
+django-queues 1.2.0 requires **Redis 7+** and a deployed Function library before the application or a worker starts:
+
+```shell
+python manage.py redis_lua_lib --deploy
+```
+
+Queue aliases must match `[A-Za-z0-9_-]`. Redis keys from django-queues before 1.2.0 are not compatible; start from empty queue keys or a new Redis logical database.
 
 ## Installation
 
