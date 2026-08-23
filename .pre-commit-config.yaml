@@ -24,7 +24,7 @@ repos:
         types: [file]
 
   - repo: https://github.com/deeprave/osvcheck
-    rev: v1.2.2
+    rev: v1.4.0
     hooks:
       - id: osvcheck
         always_run: true
