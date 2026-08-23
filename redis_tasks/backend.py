@@ -180,7 +180,9 @@ def _deserialize_run_after(value: object) -> datetime | None:
         return None
     if not isinstance(value, str):
         raise TypeError("run_after payload must be an ISO-8601 string")
-    return _utc_datetime(datetime.fromisoformat(value))
+    moment = _utc_datetime(datetime.fromisoformat(value))
+    _clock_time_from_datetime(moment)
+    return moment
 
 
 def _utc_datetime(value: datetime) -> datetime:
@@ -190,15 +192,19 @@ def _utc_datetime(value: datetime) -> datetime:
     return moment.astimezone(UTC)
 
 
-def _available_at_for(task: Task) -> ClockTime | None:
-    if task.run_after is None:
-        return None
+def _clock_time_from_datetime(moment: datetime) -> ClockTime:
     try:
-        return ClockTime.from_datetime(_utc_datetime(task.run_after))
+        return ClockTime.from_datetime(moment)
     except ValueError as exc:
         raise InvalidTask(
             "run_after cannot describe an instant before the Unix epoch"
         ) from exc
+
+
+def _available_at_for(task: Task) -> ClockTime | None:
+    if task.run_after is None:
+        return None
+    return _clock_time_from_datetime(_utc_datetime(task.run_after))
 
 
 def _enqueue_options(task: Task) -> dict[str, Any]:

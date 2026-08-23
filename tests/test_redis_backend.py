@@ -526,6 +526,22 @@ class TestGetResult:
         with pytest.raises(TaskResultDoesNotExist):
             redis_backend.get_result(str(entry_id))
 
+    def test_get_result_pre_epoch_run_after_raises_invalid_task(
+        self, redis_backend, task_queue
+    ):
+        entry_id = task_queue.enqueue(
+            {
+                "func": "tests.tasks_fixtures.add",
+                "args": [1, 2],
+                "kwargs": {},
+                "takes_context": False,
+                "run_after": datetime(1969, 12, 31, 23, 59, 59, tzinfo=UTC).isoformat(),
+            }
+        )
+
+        with pytest.raises(InvalidTask, match="Unix epoch"):
+            redis_backend.get_result(str(entry_id))
+
     @pytest.mark.parametrize(
         "run_after",
         [1, "not-a-date"],
@@ -546,6 +562,23 @@ class TestGetResult:
         )
 
         with pytest.raises(TaskResultDoesNotExist):
+            await redis_backend.aget_result(str(entry_id))
+
+    @pytest.mark.asyncio
+    async def test_aget_result_pre_epoch_run_after_raises_invalid_task(
+        self, redis_backend, task_queue
+    ):
+        entry_id = await task_queue.aenqueue(
+            {
+                "func": "tests.tasks_fixtures.add",
+                "args": [1, 2],
+                "kwargs": {},
+                "takes_context": False,
+                "run_after": datetime(1969, 12, 31, 23, 59, 59, tzinfo=UTC).isoformat(),
+            }
+        )
+
+        with pytest.raises(InvalidTask, match="Unix epoch"):
             await redis_backend.aget_result(str(entry_id))
 
     @pytest.mark.asyncio
