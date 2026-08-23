@@ -1,6 +1,6 @@
 [project]
 name = "django-redis-tasks"
-version = "1.0.0a1"
+version = "1.0.0"
 description = "Django tasks backend using Redis queues"
 readme = "README.md"
 license = "MIT"
@@ -20,7 +20,7 @@ classifiers = [
 ]
 dependencies = [
     "django>=6.1",
-    "django-queues[redis]>=1.0.3,<2.0.0",
+    "django-queues[redis]>=1.2.0,<2.0.0",
 ]
 
 [project.urls]
@@ -48,6 +48,9 @@ default-groups = ["dev"]
 
 [tool.setuptools.packages.find]
 include = ["redis_tasks", "redis_tasks.*"]
+
+[tool.ty.src]
+include = ["redis_tasks"]
 
 [build-system]
 requires = ["setuptools"]

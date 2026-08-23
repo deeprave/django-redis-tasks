@@ -1,18 +1,21 @@
 import builtins
 import uuid
+from datetime import UTC, datetime
 from typing import Any, cast
 
 import django_queue
 from django.core.exceptions import ImproperlyConfigured
 from django.tasks.backends.base import BaseTaskBackend
 from django.tasks.base import Task, TaskError, TaskResult, TaskResultStatus
-from django.tasks.exceptions import TaskResultDoesNotExist
+from django.tasks.exceptions import InvalidTask, TaskResultDoesNotExist
 from django.tasks.signals import task_enqueued
+from django.utils import timezone
 from django.utils.json import normalize_json
 from django.utils.module_loading import import_string
 from django_queue.backends.base import AsyncQueue
 from django_queue.backends.exceptions import QueueEntryNotFoundError
 from django_queue.backends.redis.redisqueue import RedisAsyncQueue
+from django_queue.clock import ClockTime
 from django_queue.entries import QueueEntryStatus
 
 from redis_tasks.entries import TaskQueueEntry
@@ -55,12 +58,13 @@ def task_from_payload(
         unavailable_task.__name__ = function_name
         unavailable_task.__qualname__ = function_name
         imported = unavailable_task
-    return Task(
+    return _task_from_stored_fields(
         func=imported.func if isinstance(imported, Task) else imported,
         priority=payload.get("priority", 0),
         backend=payload.get("backend", backend_alias),
         queue_name=payload.get("queue_name", "default"),
         takes_context=payload.get("takes_context", False),
+        run_after=_deserialize_run_after(payload.get("run_after")),
     )
 
 
@@ -120,7 +124,7 @@ def task_result_from_entry(
 
 
 def task_payload(task: Task, args: list, kwargs: dict) -> dict[str, Any]:
-    return {
+    payload = {
         "func": task.module_path,
         "args": normalize_json(list(args)),
         "kwargs": normalize_json(kwargs),
@@ -129,12 +133,86 @@ def task_payload(task: Task, args: list, kwargs: dict) -> dict[str, Any]:
         "queue_name": task.queue_name,
         "priority": task.priority,
     }
+    if task.run_after is not None:
+        payload["run_after"] = _utc_datetime(task.run_after).isoformat()
+    return payload
+
+
+def _task_from_stored_fields(
+    *,
+    func,
+    priority: int,
+    backend: str,
+    queue_name: str,
+    takes_context: bool,
+    run_after: datetime | None,
+) -> Task:
+    """Build a Task from stored payload fields.
+
+    Production reconstruction UTC-normalizes ``run_after`` in
+    ``_deserialize_run_after`` before this helper runs. The ``InvalidTask``
+    retry is defence-in-depth if a caller passes a naive datetime directly.
+    """
+    try:
+        return Task(
+            func=func,
+            priority=priority,
+            backend=backend,
+            queue_name=queue_name,
+            takes_context=takes_context,
+            run_after=run_after,
+        )
+    except InvalidTask:
+        if run_after is None or not timezone.is_naive(run_after):
+            raise
+        return Task(
+            func=func,
+            priority=priority,
+            backend=backend,
+            queue_name=queue_name,
+            takes_context=takes_context,
+            run_after=_utc_datetime(run_after),
+        )
+
+
+def _deserialize_run_after(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError("run_after payload must be an ISO-8601 string")
+    return _utc_datetime(datetime.fromisoformat(value))
+
+
+def _utc_datetime(value: datetime) -> datetime:
+    moment = value
+    if timezone.is_naive(moment):
+        moment = timezone.make_aware(moment, timezone.get_current_timezone())
+    return moment.astimezone(UTC)
+
+
+def _available_at_for(task: Task) -> ClockTime | None:
+    if task.run_after is None:
+        return None
+    try:
+        return ClockTime.from_datetime(_utc_datetime(task.run_after))
+    except ValueError as exc:
+        raise InvalidTask(
+            "run_after cannot describe an instant before the Unix epoch"
+        ) from exc
+
+
+def _enqueue_options(task: Task) -> dict[str, Any]:
+    options: dict[str, Any] = {"priority": task.priority}
+    available_at = _available_at_for(task)
+    if available_at is not None:
+        options["available_at"] = available_at
+    return options
 
 
 class RedisBackend(BaseTaskBackend):
     supports_async_task = True
     supports_get_result = True
-    supports_defer = False
+    supports_defer = True
     supports_priority = True
 
     def __init__(self, alias: str, params: dict[str, Any]) -> None:
@@ -194,7 +272,7 @@ class RedisBackend(BaseTaskBackend):
         self.validate_task(task)
         payload = task_payload(task, args, kwargs)
         queue = self._resolve_queue()
-        entry_id = queue.enqueue(payload, priority=task.priority)
+        entry_id = queue.enqueue(payload, **_enqueue_options(task))
         entry = queue.find(entry_id)
         result = task_result_from_entry(task, cast(TaskQueueEntry, entry), self.alias)
         task_enqueued.send(type(self), task_result=result)
@@ -204,35 +282,39 @@ class RedisBackend(BaseTaskBackend):
         self.validate_task(task)
         payload = task_payload(task, args, kwargs)
         queue = self._resolve_queue()
-        entry_id = await queue.aenqueue(payload, priority=task.priority)
+        entry_id = await queue.aenqueue(payload, **_enqueue_options(task))
         entry = await queue.afind(entry_id)
         result = task_result_from_entry(task, cast(TaskQueueEntry, entry), self.alias)
         await task_enqueued.asend(type(self), task_result=result)
         return result
 
-    def get_result(self, result_id: str) -> TaskResult:
+    def _parse_result_id(self, result_id: str) -> uuid.UUID:
         try:
-            entry_id = uuid.UUID(result_id)
+            return uuid.UUID(result_id)
         except (ValueError, AttributeError, TypeError) as exc:
             raise TaskResultDoesNotExist(result_id) from exc
+
+    def _result_from_stored_entry(
+        self, entry: TaskQueueEntry, result_id: str
+    ) -> TaskResult:
+        try:
+            task = task_from_payload(entry.payload, self.alias, allow_missing=True)
+        except (TypeError, ValueError) as exc:
+            raise TaskResultDoesNotExist(result_id) from exc
+        return task_result_from_entry(task, entry, self.alias)
+
+    def get_result(self, result_id: str) -> TaskResult:
+        entry_id = self._parse_result_id(result_id)
         try:
             entry = self._resolve_queue().find(entry_id)
         except QueueEntryNotFoundError as exc:
             raise TaskResultDoesNotExist(result_id) from exc
-        task = task_from_payload(entry.payload, self.alias, allow_missing=True)
-        return task_result_from_entry(task, cast(TaskQueueEntry, entry), self.alias)
+        return self._result_from_stored_entry(cast(TaskQueueEntry, entry), result_id)
 
     async def aget_result(self, result_id: str) -> TaskResult:
-        try:
-            entry_id = uuid.UUID(result_id)
-        except (ValueError, AttributeError, TypeError) as exc:
-            raise TaskResultDoesNotExist(result_id) from exc
+        entry_id = self._parse_result_id(result_id)
         try:
             entry = await self._resolve_queue().afind(entry_id)
         except QueueEntryNotFoundError as exc:
             raise TaskResultDoesNotExist(result_id) from exc
-        task = task_from_payload(entry.payload, self.alias, allow_missing=True)
-        return task_result_from_entry(task, cast(TaskQueueEntry, entry), self.alias)
-
-    def _entry_to_result(self, task: Task, entry: TaskQueueEntry) -> TaskResult:
-        return task_result_from_entry(task, entry, self.alias)
+        return self._result_from_stored_entry(cast(TaskQueueEntry, entry), result_id)
