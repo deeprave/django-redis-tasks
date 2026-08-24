@@ -33,6 +33,12 @@ minversion = "8.0"
 asyncio_default_fixture_loop_scope = "function"
 pythonpath = ["."]
 testpaths = ["tests"]
+python_files = ["test_*.py", "tests.py"]
+DJANGO_SETTINGS_MODULE = "tests.settings"
+django_find_project = false
+
+[tool.ruff]
+extend-exclude = [".django-src-*_cache"]
 
 [dependency-groups]
 dev = [
@@ -42,6 +48,7 @@ dev = [
     "testcontainers>=4.9.0",
     "ty>=0.0.69",
     "pytest-asyncio>=0.25.0",
+    "pytest-django>=4.14.0",
 ]
 [tool.uv]
 default-groups = ["dev"]

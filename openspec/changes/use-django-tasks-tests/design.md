@@ -36,8 +36,9 @@ This package already uses pytest with `settings.configure` in
 - Point Django's default task backend at `RedisBackend` plus the existing
   Redis testcontainer via Django settings, not by rewriting test methods.
 - Keep Django's test files out of this git tree. Cache a throwaway copy
-  locally in a directory pinned to the installed Django version; reuse it on
-  later pytest runs; discard (or prune) that directory when Django is bumped.
+  locally as `.django-src-<version>_cache/` (gitignored via `.*_cache`);
+  reuse it on later pytest runs; discard (or prune) that directory when
+  Django is bumped. Exclude it from ruff and ty.
 
 **Non-Goals:**
 
@@ -79,37 +80,111 @@ Rejected: this repo's default command is pytest; pytest-django is the bridge.
 ### Version-pinned local cache (fetch once per installed Django)
 
 `django.tasks` has no tests on the wheel. Resolve Django **source** for the
-exact installed version (`django.get_version()`, e.g. `6.1`) and add that
-tree's `tests/` directory to pytest's `pythonpath` so `import tasks` is
-Django's test package (`tasks.tasks`, `tasks.test_tasks`). Add `tests/tasks/`
-to collection (not only this repo's `tests/`).
+exact installed version (`django.get_version()`) and put that
+version's `tests/tasks/` tree on pytest's `pythonpath` as the `tasks`
+package (`tasks.tasks`, `tasks.test_tasks`). Collect from that package (not
+only this repo's `tests/`).
+
+`django.get_version()` is the cache-dir and GitHub-tag key. Django omits a
+trailing `.0`, so this is already upgrade-safe:
+
+- 6.1.0 → `6.1` → `.django-src-6.1_cache` and tag `6.1`
+- 6.1.1 → `6.1.1` → `.django-src-6.1.1_cache` and tag `6.1.1`
+- 6.2.0 → `6.2` → `.django-src-6.2_cache` and tag `6.2`
+
+A bump looks at a new directory; the old one is unused. Do not hard-code
+`6.1` in the resolver.
+
+Layout (shallow, one cache dir per version):
+
+```
+.django-src-6.1_cache/     # gitignored by .*_cache; name follows get_version()
+  tasks/                   # Django's tests/tasks/ only
+    __init__.py
+    tasks.py
+    test_tasks.py
+    …
+```
+
+`pythonpath` includes `.django-src-<version>_cache` so `import tasks` is
+Django's test package. Do not nest under `.cache/django-src/<version>/`.
+Do not extract `django/`, `tests/runtests.py`, or `tests/test_utils/`.
+
+The installed wheel already provides the library (`django.tasks`,
+`django.test.SimpleTestCase`, Dummy/Immediate backends). Django 6.1's
+`tests/tasks/` imports only `django.*` and relative `. import tasks`. It
+does not need `runtests.py`, `test_utils`, or other project-test helpers.
 
 Resolution order:
 
-1. `DJANGO_TESTS_ROOT` if set (local Django checkout's `tests/` directory).
-2. Gitignored cache directory **named for that exact version**, e.g.
-   `.cache/django-src/<version>/`. If that directory already contains a usable
-   `tests/tasks/` tree, reuse it. Do **not** fetch or unpack on every pytest
-   run.
-3. On a miss for that version only: copy **`tests/tasks/`** from GitHub at
-   the tag that matches the installed version (`django.get_version()`, e.g.
-   tag `6.1`). Do **not** keep a full Django checkout in the cache. A sparse
-   clone (`git clone --depth 1 --filter=blob:none --sparse --branch <tag>`
-   then `git sparse-checkout set tests/tasks`) or extracting only that
-   subtree from the tag archive is fine. Recursively materialize that
-   directory into `.cache/django-src/<version>/`, then drop any leftover
-   `.git` / unused archive members.
+1. `DJANGO_TESTS_ROOT` if set (that checkout's `tests/` directory, so
+   `DJANGO_TESTS_ROOT/tasks/` is the test package).
+2. Gitignored `.django-src-<version>_cache/`. If `tasks/test_tasks.py`
+   is already present, reuse it. Do **not** fetch or unpack on every
+   pytest run.
+3. On a miss for that version only: download the GitHub **tag archive**
+   for `django.get_version()` (e.g.
+   `https://github.com/django/django/archive/refs/tags/6.1.tar.gz`) and
+   extract only members under `*/tests/tasks/` into
+   `.django-src-<version>_cache/tasks/`. Prefer an atomic write (extract
+   to a temp dir, then rename). Do not sparse-clone the whole Django repo.
 4. Fail collection with a clear error if unresolved (unknown tag, network
-   failure, empty `tests/tasks/`).
+   failure, empty `tasks/` tree).
 
-When Django is upgraded, pytest looks at a **new** version directory. Older
-sibling directories under the cache root are leftover and MAY be deleted
-automatically after the current version resolves, so stale trees do not
-accumulate. They are never committed.
+When Django is upgraded, pytest looks at a **new** `.django-src-<new>_cache`
+directory. Older `.django-src-*_cache` siblings MAY be deleted after the
+current version resolves. They are never committed.
+
+Exclude `.django-src-*_cache` from ruff (`extend-exclude`). ty already
+limits `include` to `redis_tasks`, so it will not type-check the cache.
 
 `pyproject.toml` cannot hard-code a versioned cache path. A pytest hook
 (conftest / small plugin) registers the resolved path at configure time.
 That hook is this repo's pytest config, not a copy of Django tests.
+
+### How it folds into `uv run pytest`
+
+Same process as today (`uv run pytest` / CI `uv run pytest -Walways -Werror`).
+No second command, job, or marker. The cache is not a pytest plugin for Django;
+it is an extra collection root registered at configure time.
+
+1. **Configure (before collection).** `tests/conftest.py` (or a tiny local
+   pytest plugin it loads) runs in `pytest_configure`:
+   - Read `django.get_version()` from the installed wheel.
+   - Resolve `DJANGO_TESTS_ROOT` or `.django-src-<version>_cache/` (fetch
+     once on miss).
+   - Insert the cache **root** on `sys.path` so `import tasks` is Django's
+     test package.
+   - If this run is the default suite (`config.args` is the ini `testpaths`,
+     i.e. `tests/`, not an explicit file path), append that cache root (or
+     `…/tasks/`) to `config.args` so pytest collects it.
+   - `collect_ignore` / path filter drops `test_dummy_backend.py`,
+     `test_immediate_backend.py`, `test_custom_backend.py`.
+   - Method-level skips for Dummy `.results` / Immediate SUCCESSFUL-on-enqueue
+     are registered here (names, not rewritten bodies).
+2. **Django setup (same configure phase, pytest-django).**
+   `DJANGO_SETTINGS_MODULE` points at a suite settings module:
+   `TASKS["default"]` is `RedisBackend`. This replaces ad-hoc
+   `settings.configure` so there is one setup path. pytest-django then runs
+   `SimpleTestCase` natively (including Django's async test methods).
+3. **Session: Redis testcontainer.** Django's `TaskTestCase` will not request
+   today's `redis_url` / `task_queue` fixtures. A session-scoped (or autouse)
+   fixture starts the existing Redis testcontainer, writes its URL into
+   `settings.QUEUES[*]["LOCATION"]`, and clears queue records between tests
+   the same way `task_queue` does. Package tests keep using that Redis.
+4. **Collection.** Two roots in one run:
+   - `tests/` — this package's tests (unchanged node ids).
+   - `.django-src-<version>_cache/tasks/` — Django's `test_*.py` as unittest
+     `TaskTestCase` nodes (`tasks/test_tasks.py::TaskTestCase::test_…`).
+   An explicit path (`pytest tests/test_redis_backend.py`) does **not** pull
+   in Django's suite; only the default command does.
+5. **Run.** Failures from either root fail the same pytest process. ruff and
+   ty are not invoked on the cache; they are separate tools and exclude it.
+
+Cold cache: first default pytest for a version may hit the network during
+`pytest_configure`. Later runs for that version are local and look like any
+other extra test directory. Offline + missing cache fails collection with a
+message that names the version and expected path.
 
 ### Default `TASKS` is RedisBackend
 
@@ -132,12 +207,15 @@ Clear queue records between tests the same way `task_queue` does today.
   replaces the default alias; skip methods that only make sense for Dummy or
   Immediate.
 - **[Risk] Cold cache needs network.** → Mitigation: fetch only when
-  `.cache/django-src/<installed-version>/` is missing; later pytest runs for
+  `.django-src-<installed-version>_cache/` is missing; later pytest runs for
   the same version are local. `DJANGO_TESTS_ROOT` skips the cache. Fail loudly
   if missing and offline.
 - **[Risk] Cache grows after Django bumps.** → Mitigation: directory name is
-  the installed version; old version dirs are discardable and MAY be pruned
-  once the current version is resolved.
+  `.django-src-<version>_cache`; old version dirs are discardable and MAY be
+  pruned once the current version is resolved.
+- **[Risk] ruff/format walks the cache.** → Mitigation: `extend-exclude`
+  `.django-src-*_cache`; the directory is gitignored so pre-commit will not
+  see it unless someone stages it.
 - **[Trade-off] pytest-django is a new dev dependency.** Accepted: it is how
   pytest runs Django tests seamlessly.
 

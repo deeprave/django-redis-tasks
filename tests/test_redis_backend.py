@@ -138,6 +138,12 @@ class TestEnqueue:
         assert result.status == TaskResultStatus.READY
         uuid.UUID(result.id)
 
+    def test_clear_removes_enqueued_entries(self, redis_backend):
+        result = redis_backend.enqueue(make_task(), (1, 2), {})
+        redis_backend.clear()
+        with pytest.raises(TaskResultDoesNotExist):
+            redis_backend.get_result(result.id)
+
     def test_enqueue_accepts_async_task(self, redis_backend):
         task = make_task(func=async_add)
         result = redis_backend.enqueue(task, (1, 2), {})
@@ -360,6 +366,13 @@ class TestGetResult:
         result = redis_backend.get_result(str(entry_id))
         assert result.status == TaskResultStatus.SUCCESSFUL
         assert result.return_value == 3
+
+    @pytest.mark.asyncio
+    async def test_get_result_from_async_test(self, redis_backend, task_queue):
+        result = await redis_backend.aenqueue(make_task(), (1, 2), {})
+        fetched = redis_backend.get_result(result.id)
+        assert fetched.id == result.id
+        assert fetched.status == TaskResultStatus.READY
 
     def test_get_result_reconstructs_decorated_task(self, redis_backend, task_queue):
         entry_id = task_queue.enqueue(

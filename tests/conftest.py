@@ -9,6 +9,7 @@ from django_queue.backends.redis.functions import load_function_library
 from testcontainers.community.redis import RedisContainer
 
 from redis_tasks.backend import RedisBackend
+from tests.django_src import DjangoTasksSourceError, register_django_tasks_collection
 
 _REDIS_IMAGE = "redis:7-alpine"
 
@@ -31,6 +32,18 @@ def _slow_tests_enabled():
     return os.getenv("SLOW_TESTS") in ("true", "1", "enabled")
 
 
+def _point_django_queues_at(redis_url: str) -> None:
+    settings.QUEUES["default"]["LOCATION"] = redis_url
+    queue_settings = django_queue.queues.settings
+    queue_settings["default"]["LOCATION"] = redis_url
+    django_queue.queues.close_all()
+
+
+def _clear_default_task_queue() -> None:
+    queue = django_queue.queues["default"]
+    queue._run_synchronously(queue._provider.aclear_records)
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers", "slow: mark test as slow (skipped unless SLOW_TESTS=true/1/enabled)"
@@ -39,33 +52,20 @@ def pytest_configure(config):
         not _slow_tests_enabled(),
         reason="Test skipped because SLOW_TESTS environment variable not set to true, 1 or enabled",
     )
-    if not settings.configured:
-        settings.configure(
-            USE_TZ=True,
-            TASKS={
-                "default": {
-                    "BACKEND": "redis_tasks.backend.RedisBackend",
-                    "QUEUES": ["default", "alternate"],
-                }
-            },
-            QUEUES={
-                "default": {
-                    "BACKEND": "django_queue.backends.redis.RedisAsyncPriorityQueueJson",
-                    "LOCATION": "redis://localhost:6379/0",
-                    "ENTRY_CLASS": "redis_tasks.entries.TaskQueueEntry",
-                    "WORKER": "redis_tasks.worker.RedisTaskWorker",
-                }
-            },
-        )
+    try:
+        register_django_tasks_collection(config)
+    except DjangoTasksSourceError as exc:
+        raise pytest.UsageError(str(exc)) from exc
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def redis_url() -> Iterator[str]:
     with RedisContainer(_REDIS_IMAGE) as redis_container:
         host = redis_container.get_container_host_ip()
         port = redis_container.get_exposed_port(6379)
         redis_url = f"redis://{host}:{port}/0"
         _deploy_django_queues_functions(redis_url)
+        _point_django_queues_at(redis_url)
         yield redis_url
 
 
@@ -94,3 +94,17 @@ def redis_backend(task_queue, monkeypatch):
     backend = RedisBackend(alias="default", params={"QUEUES": ["default", "alternate"]})
     monkeypatch.setattr(backend, "_resolve_queue", lambda: task_queue)
     return backend
+
+
+@pytest.fixture(autouse=True)
+def django_task_test_isolation(request):
+    module_name = getattr(request.module, "__name__", "")
+    if module_name != "tasks.test_tasks":
+        yield
+        return
+    request.getfixturevalue("redis_url")
+    _clear_default_task_queue()
+    try:
+        yield
+    finally:
+        _clear_default_task_queue()
