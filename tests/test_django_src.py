@@ -62,23 +62,6 @@ def test_archive_url_uses_github_tag_for_that_version(version: str):
 
 
 @pytest.mark.parametrize("version", _VERSIONS)
-def test_resolve_uses_django_tests_root_env(tmp_path, monkeypatch, version: str):
-    tests_root = tmp_path / "checkout" / "tests"
-    (tests_root / "tasks").mkdir(parents=True)
-    (tests_root / "tasks" / "test_tasks.py").write_text("# local\n", encoding="utf-8")
-    monkeypatch.setenv("DJANGO_TESTS_ROOT", str(tests_root))
-
-    resolved = resolve_django_tasks_root(
-        version=version,
-        project_root=tmp_path,
-        download=lambda url, dest: pytest.fail("must not download"),
-    )
-
-    assert resolved == tests_root
-    assert (resolved / "tasks" / "test_tasks.py").is_file()
-
-
-@pytest.mark.parametrize("version", _VERSIONS)
 def test_resolve_reuses_existing_version_cache_without_download(tmp_path, version: str):
     cache = tmp_path / cache_dir_name(version)
     (cache / "tasks").mkdir(parents=True)
@@ -135,11 +118,21 @@ def test_extract_tasks_from_archive_only_keeps_tests_tasks(tmp_path, version: st
     }
 
 
-@pytest.mark.parametrize("version", _VERSIONS)
-def test_resolve_fails_with_version_and_expected_path(tmp_path, version: str):
-    def download(url: str, dest: Path) -> None:
-        dest.write_bytes(b"not a tar")
+def _download_invalid_archive(url: str, dest: Path) -> None:
+    dest.write_bytes(b"not a tar")
 
+
+def _download_raises_url_only_error(url: str, dest: Path) -> None:
+    raise DjangoTasksSourceError(f"Could not download Django source from {url}")
+
+
+@pytest.mark.parametrize("version", _VERSIONS)
+@pytest.mark.parametrize(
+    "download",
+    [_download_invalid_archive, _download_raises_url_only_error],
+    ids=["invalid-archive", "download-error"],
+)
+def test_resolve_fails_with_version_and_expected_path(tmp_path, version: str, download):
     expected = tmp_path / cache_dir_name(version) / "tasks" / "test_tasks.py"
     with pytest.raises(DjangoTasksSourceError, match=re.escape(version)) as exc_info:
         resolve_django_tasks_root(

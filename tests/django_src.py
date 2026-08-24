@@ -9,11 +9,10 @@ import tarfile
 import tempfile
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-DJANGO_TESTS_ROOT_ENV = "DJANGO_TESTS_ROOT"
 IGNORED_TASK_MODULES = frozenset(
     {
         "test_dummy_backend.py",
@@ -169,21 +168,9 @@ def resolve_django_tasks_root(
     *,
     version: str,
     project_root: Path,
-    env: Mapping[str, str] | None = None,
     download: Download | None = None,
 ) -> Path:
     """Return the pythonpath root whose ``tasks`` package is Django's tests/tasks."""
-    environ = os.environ if env is None else env
-    tests_root = environ.get(DJANGO_TESTS_ROOT_ENV)
-    if tests_root:
-        root = Path(tests_root)
-        expected = expected_test_tasks_path(root)
-        if not expected.is_file():
-            raise DjangoTasksSourceError(
-                f"Could not resolve Django {version} tests/tasks; expected {expected}"
-            )
-        return root
-
     dest_root = cache_root(project_root, version)
     expected = expected_test_tasks_path(dest_root)
     if expected.is_file():
@@ -199,9 +186,7 @@ def resolve_django_tasks_root(
         archive_path = Path(tmp) / "django.tar.gz"
         try:
             fetch(url, archive_path)
-        except DjangoTasksSourceError:
-            raise
-        except OSError as exc:
+        except (DjangoTasksSourceError, OSError) as exc:
             raise DjangoTasksSourceError(
                 f"Could not resolve Django {version} tests/tasks; expected {expected}"
             ) from exc

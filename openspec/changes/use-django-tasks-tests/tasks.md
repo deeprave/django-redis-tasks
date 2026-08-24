@@ -13,9 +13,9 @@
 ## 2. Collect Django's `tests/tasks/` for the installed version
 
 - [x] 2.1 Resolve Django's `tests/tasks/` tree for `django.get_version()`
-      (`DJANGO_TESTS_ROOT`, else gitignored `.django-src-<version>_cache/tasks/`,
-      else one GitHub tag-archive extract of `tests/tasks/` only into that
-      cache) and register it on pytest's pythonpath/collection path; verify
+      (gitignored `.django-src-<version>_cache/tasks/`, else one GitHub
+      tag-archive extract of `tests/tasks/` only into that cache) and register
+      it on pytest's pythonpath/collection path; verify
       the cache is not a full Django checkout, `import tasks` is Django's
       test package, `tasks.test_tasks` is collected, and a second pytest run
       for the same version does not fetch again.

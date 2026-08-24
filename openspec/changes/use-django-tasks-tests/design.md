@@ -117,19 +117,18 @@ does not need `runtests.py`, `test_utils`, or other project-test helpers.
 
 Resolution order:
 
-1. `DJANGO_TESTS_ROOT` if set (that checkout's `tests/` directory, so
-   `DJANGO_TESTS_ROOT/tasks/` is the test package).
-2. Gitignored `.django-src-<version>_cache/`. If `tasks/test_tasks.py`
+1. Gitignored `.django-src-<version>_cache/`. If `tasks/test_tasks.py`
    is already present, reuse it. Do **not** fetch or unpack on every
    pytest run.
-3. On a miss for that version only: download the GitHub **tag archive**
+2. On a miss for that version only: download the GitHub **tag archive**
    for `django.get_version()` (e.g.
    `https://github.com/django/django/archive/refs/tags/6.1.tar.gz`) and
    extract only members under `*/tests/tasks/` into
    `.django-src-<version>_cache/tasks/`. Prefer an atomic write (extract
    to a temp dir, then rename). Do not sparse-clone the whole Django repo.
-4. Fail collection with a clear error if unresolved (unknown tag, network
-   failure, empty `tasks/` tree).
+3. Fail collection with a clear error if unresolved (unknown tag, network
+   failure, empty `tasks/` tree). The message names the Django version and
+   the expected cache path.
 
 When Django is upgraded, pytest looks at a **new** `.django-src-<new>_cache`
 directory. Older `.django-src-*_cache` siblings MAY be deleted after the
@@ -151,8 +150,7 @@ it is an extra collection root registered at configure time.
 1. **Configure (before collection).** `tests/conftest.py` (or a tiny local
    pytest plugin it loads) runs in `pytest_configure`:
    - Read `django.get_version()` from the installed wheel.
-   - Resolve `DJANGO_TESTS_ROOT` or `.django-src-<version>_cache/` (fetch
-     once on miss).
+   - Resolve `.django-src-<version>_cache/` (fetch once on miss).
    - Insert the cache **root** on `sys.path` so `import tasks` is Django's
      test package.
    - If this run is the default suite (`config.args` is the ini `testpaths`,
@@ -167,11 +165,12 @@ it is an extra collection root registered at configure time.
    `TASKS["default"]` is `RedisBackend`. This replaces ad-hoc
    `settings.configure` so there is one setup path. pytest-django then runs
    `SimpleTestCase` natively (including Django's async test methods).
-3. **Session: Redis testcontainer.** Django's `TaskTestCase` will not request
-   today's `redis_url` / `task_queue` fixtures. A session-scoped (or autouse)
-   fixture starts the existing Redis testcontainer, writes its URL into
-   `settings.QUEUES[*]["LOCATION"]`, and clears queue records between tests
-   the same way `task_queue` does. Package tests keep using that Redis.
+3. **Session: Redis testcontainer.** Root `conftest.py` owns session
+   `redis_url` and autouse isolation so both `tests/` and
+   `.django-src-*_cache/` see the testcontainer. It writes the container URL
+   into `settings.QUEUES[*]["LOCATION"]` and clears queue records around
+   imported Django cases. Package tests keep `task_queue` / `redis_backend`
+   in `tests/conftest.py`.
 4. **Collection.** Two roots in one run:
    - `tests/` — this package's tests (unchanged node ids).
    - `.django-src-<version>_cache/tasks/` — Django's `test_*.py` as unittest
@@ -208,8 +207,7 @@ Clear queue records between tests the same way `task_queue` does today.
   Immediate.
 - **[Risk] Cold cache needs network.** → Mitigation: fetch only when
   `.django-src-<installed-version>_cache/` is missing; later pytest runs for
-  the same version are local. `DJANGO_TESTS_ROOT` skips the cache. Fail loudly
-  if missing and offline.
+  the same version are local. Fail loudly if missing and offline.
 - **[Risk] Cache grows after Django bumps.** → Mitigation: directory name is
   `.django-src-<version>_cache`; old version dirs are discardable and MAY be
   pruned once the current version is resolved.
