@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.0.0
+## v1.0.0 - 2026-08-24
 
 - Support Django `run_after` deferred tasks by passing UTC `available_at` through django-queues 1.2.0.
 - Require Redis 7+ and a deployed django-queues Redis Function library.
