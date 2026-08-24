@@ -146,6 +146,11 @@ specific boundaries through its thread bridge.
 
 ## Usage
 
+Task definition, enqueueing, and result handling are Django's
+[`django.tasks` API](https://docs.djangoproject.com/en/6.1/topics/tasks/).
+This package provides the Redis backend; Django's documentation covers `@task`,
+`enqueue` / `aenqueue`, and `TaskResult`.
+
 A task is created using Django's `@task` decorator:
 
 ```python

@@ -1,5 +1,7 @@
 import builtins
 import uuid
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -215,6 +217,23 @@ def _enqueue_options(task: Task) -> dict[str, Any]:
     return options
 
 
+def _call_sync_from_any_thread[T](
+    func: Callable[..., T], *args: Any, **kwargs: Any
+) -> T:
+    """Run a django-queue sync API from sync or async tests.
+
+    ``AsyncQueue.find`` uses ``async_to_sync``, which cannot run on a thread
+    that already has an event loop (Django's ``async def`` tests).
+    """
+    try:
+        return func(*args, **kwargs)
+    except RuntimeError as exc:
+        if "async event loop" not in str(exc):
+            raise
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(func, *args, **kwargs).result()
+
+
 class RedisBackend(BaseTaskBackend):
     supports_async_task = True
     supports_get_result = True
@@ -230,8 +249,7 @@ class RedisBackend(BaseTaskBackend):
             )
         if self._queue_alias not in django_queue.queues.settings:
             raise ImproperlyConfigured(
-                f"Redis task backend queue_alias {self._queue_alias!r} is not "
-                "configured in QUEUES."
+                f"Redis task backend queue_alias {self._queue_alias!r} is not configured in QUEUES."
             )
         try:
             queue_backend = import_string(
@@ -240,13 +258,11 @@ class RedisBackend(BaseTaskBackend):
             is_redis_queue = issubclass(queue_backend, RedisAsyncQueue)
         except (ImportError, AttributeError, TypeError) as exc:
             raise ImproperlyConfigured(
-                f"Redis task backend queue_alias {self._queue_alias!r} must use a "
-                "RedisAsyncQueue-compatible backend."
+                f"Redis task backend queue_alias {self._queue_alias!r} must use a RedisAsyncQueue-compatible backend."
             ) from exc
         if not is_redis_queue:
             raise ImproperlyConfigured(
-                f"Redis task backend queue_alias {self._queue_alias!r} must use a "
-                "RedisAsyncQueue-compatible backend."
+                f"Redis task backend queue_alias {self._queue_alias!r} must use a RedisAsyncQueue-compatible backend."
             )
         entry_class = django_queue.queues.settings[self._queue_alias].get("ENTRY_CLASS")
         if isinstance(entry_class, str):
@@ -312,7 +328,7 @@ class RedisBackend(BaseTaskBackend):
     def get_result(self, result_id: str) -> TaskResult:
         entry_id = self._parse_result_id(result_id)
         try:
-            entry = self._resolve_queue().find(entry_id)
+            entry = _call_sync_from_any_thread(self._resolve_queue().find, entry_id)
         except QueueEntryNotFoundError as exc:
             raise TaskResultDoesNotExist(result_id) from exc
         return self._result_from_stored_entry(cast(TaskQueueEntry, entry), result_id)
@@ -324,3 +340,7 @@ class RedisBackend(BaseTaskBackend):
         except QueueEntryNotFoundError as exc:
             raise TaskResultDoesNotExist(result_id) from exc
         return self._result_from_stored_entry(cast(TaskQueueEntry, entry), result_id)
+
+    def clear(self) -> None:
+        queue = self._resolve_queue()
+        queue._run_synchronously(queue._provider.aclear_records)

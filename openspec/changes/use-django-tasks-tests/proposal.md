@@ -11,11 +11,11 @@ inferred, not proven, and Django upgrades can change the contract unnoticed.
   (`SimpleTestCase`, pytest-django, `python_files` including `tests.py`). Do
   not commit those files and do not re-host test methods as pytest functions.
 - Keep a gitignored throwaway copy of Django's **`tests/tasks/`** subtree
-  only, in a directory named for the exact installed Django version. On a
-  cache miss, copy that path from GitHub at the matching version tag (sparse
-  clone or tag-archive extract of that directory). Do not fetch or unpack on
-  later pytest runs. When Django is upgraded, use a new directory and discard
-  the old one. Do not keep a full Django checkout.
+  only, in `.django-src-<version>_cache/` (matches `.*_cache` in
+  `.gitignore`). On a cache miss, extract that path from the GitHub tag
+  archive. Do not fetch or unpack on later pytest runs. When Django is
+  upgraded, use a new directory and discard the old one. Do not keep a full
+  Django checkout. Do not run ruff or ty on the cache.
 - Collect only tests that apply to a third-party `BaseTaskBackend`. Do not
   collect DummyBackend, ImmediateBackend, or custom-backend modules.
 - Default Django `TASKS` under pytest is `RedisBackend` plus the existing Redis

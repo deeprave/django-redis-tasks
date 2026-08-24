@@ -35,7 +35,8 @@ repository.
 #### Scenario: Old cache is discardable after a Django upgrade
 - **WHEN** the installed Django version changes
 - **THEN** the previous version's cached tree is no longer used, and that
-  version-named cache directory can be deleted without affecting the new run
+  version-named `.django-src-<version>_cache` directory can be deleted without
+  affecting the new run
 
 #### Scenario: Imported tests use the Redis task backend
 - **WHEN** an imported contract test enqueues or looks up a task through Django's
