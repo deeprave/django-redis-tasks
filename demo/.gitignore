@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.py[cod]
+var/*.json
+var/*.jsonl
+var/pulse.stop
+var/pulse.active
+var/pulse.chain
