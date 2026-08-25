@@ -1,8 +1,9 @@
 ## Purpose
 
 Give developers a small, runnable Django app that shows this package's Redis
-task backend: sync and async tasks, deferred `run_after` work, and live Redis
-queue observation without treating the unit tests as the only example.
+task backend on a live page: meaningful sync and async work, immediate and
+delayed `run_after`, self-rescheduling chains, and Redis queue observation
+without treating the unit tests as the only example.
 
 ## ADDED Requirements
 
@@ -18,51 +19,86 @@ the adjacent package as a dependency rather than copying the backend.
 - **THEN** they can open a local dashboard backed by the configured Redis task
   queue
 
-### Requirement: Synchronous and asynchronous tasks
+### Requirement: Meaningful catalogue tasks
 
-The demo SHALL expose at least one synchronous Django task and at least one
-asynchronous Django task. Both SHALL be enqueueable from the dashboard and
-SHALL return a result the dashboard can display.
+The demo SHALL expose three catalogue tasks that perform demo-local work,
+not sleep-only placeholders:
 
-#### Scenario: Submit a synchronous task
-- **WHEN** a user submits the synchronous catalogue task
-- **THEN** the dashboard records a queued result and later shows a successful
-  result after a worker runs it
+- a synchronous **pulse** that records a sample artefact and may enqueue
+  its next run
+- an asynchronous **summarise** task that reads those samples and writes a
+  report artefact
+- a synchronous **probe** that retries with increasing `run_after` delays
+  until a precondition is met
 
-#### Scenario: Submit an asynchronous task
-- **WHEN** a user submits the asynchronous catalogue task
-- **THEN** the dashboard records a queued result and later shows a successful
-  result after a worker awaits that task
+Both pulse and summarise SHALL be enqueueable from the dashboard. Results
+SHALL include enough payload for the dashboard to show a sample, report
+path, or error.
 
-### Requirement: Immediate and deferred enqueue
+#### Scenario: Submit a pulse run
+- **WHEN** a user starts the pulse
+- **THEN** a worker records a sample artefact under the demo directory
+- **AND** the dashboard later shows a successful result for that generation
+
+#### Scenario: Submit a summarise run
+- **WHEN** a user submits the summarise task
+- **THEN** a worker awaits that task, writes a report artefact from the
+  recorded samples, and the dashboard shows a successful result
+
+### Requirement: Immediate, delayed, and self-rescheduled enqueue
 
 The demo SHALL allow immediate enqueue and enqueue with a future `run_after`.
-A deferred task SHALL remain undispatched until its due time.
+A deferred task SHALL remain undispatched until its due time. The pulse SHALL
+schedule its next generation by enqueueing itself with `run_after` unless
+stop has been requested. Calendar schedules are out of scope.
 
 #### Scenario: Immediate enqueue
-- **WHEN** a user submits a catalogue task without a delay
+- **WHEN** a user submits summarise without a delay
 - **THEN** a worker may claim it as soon as it is pending
 
 #### Scenario: Deferred enqueue
-- **WHEN** a user submits a catalogue task with a future `run_after`
-- **THEN** the dashboard shows that work as waiting until the due time
+- **WHEN** a user submits summarise with a future `run_after`
+- **THEN** the dashboard shows that work as scheduled until the due time
 - **AND** a worker does not run it before that time
 
-### Requirement: Live Redis queue observation
+#### Scenario: Pulse reschedules itself
+- **WHEN** a pulse generation completes successfully and stop is not requested
+- **THEN** the worker enqueues the next generation with a future `run_after`
+- **AND** the dashboard shows a new scheduled entry in that chain
+
+#### Scenario: Pulse stop prevents the next generation
+- **WHEN** a user stops the pulse
+- **THEN** the in-flight generation may finish
+- **AND** no further pulse generation is enqueued
+
+#### Scenario: Probe backs off with run_after
+- **WHEN** the probe runs before its precondition is met
+- **THEN** it fails or records a retry and enqueues itself with a longer
+  `run_after` than the previous attempt, up to a documented cap
+
+### Requirement: Live board of queue lifecycle
 
 The dashboard SHALL observe Redis queue lifecycle through django-queues'
 async queue observer API. It SHALL NOT poll Redis from the browser. It SHALL
-update queued, running, and terminal states without a full-page refresh.
+present entries in Scheduled and Done columns and update them without a
+full-page refresh. Deferred entries SHALL show remaining wait. Pulse
+generations SHALL be identifiable as a chain. Ready and running observer
+states MAY be omitted from the board when they do not persist long enough
+to display.
 
 #### Scenario: Observe a successful run
 - **WHEN** a submitted task is claimed and completes successfully
-- **THEN** the browser receives live queued and running updates followed by
-  the final result
+- **THEN** the dashboard shows the final result in Done
 
 #### Scenario: Observe deferred work becoming due
 - **WHEN** a deferred task's `run_after` is reached
-- **THEN** the dashboard shows it becoming claimable and then running without
-  a full-page refresh
+- **THEN** the dashboard moves it from Scheduled to Done without a
+  full-page refresh
+
+#### Scenario: Observe a pulse chain
+- **WHEN** two pulse generations have run and a third is waiting
+- **THEN** the dashboard shows those generations as one chain rather than
+  unrelated rows
 
 ### Requirement: Demo operating conventions
 

@@ -6,9 +6,9 @@ already show the operating pattern: no Django database, Compose Redis,
 `runserver` plus `runqueues`, `queue_observer` projection, SSE to the browser.
 
 This package's public surface is Django's Tasks API (`enqueue` / `aenqueue`,
-`run_after`) plus `QUEUES`/`TASKS` wiring from the README. The unstarted
-`create-django-redis-tasks-demo` change assumed async-only filesystem tasks
-and older queue class names; this design replaces that approach.
+`run_after`) plus `QUEUES`/`TASKS` wiring from the README. Recurring calendar
+schedules (`add-schedule-support`) are a separate change; this demo chains
+one-shot `run_after` enqueues instead.
 
 ## Goals / Non-Goals
 
@@ -18,17 +18,20 @@ and older queue class names; this design replaces that approach.
   run this demo the same way.
 - Enqueue only through Django's task API so the demo proves the backend, not
   a raw `queue.enqueue` bypass.
-- Make sync vs async task functions, immediate vs `run_after`, and observer
-  lifecycle all visible on one dashboard.
+- Make sync vs async task functions, immediate vs delayed `run_after`,
+  self-reschedule, and observer lifecycle all visible on one dashboard.
+- Leave artefacts on disk (samples and a report under `demo/var/`) so a run
+  is more than a status badge.
 
 **Non-Goals:**
 
 - Auth, multi-user isolation, durable dashboard history, or a monitoring
   product.
-- Recurring schedules (`add-schedule-support`); only one-shot `run_after`.
+- Calendar / cron schedules (`add-schedule-support`).
 - Custom demo workers that claim Redis entries outside `RedisTaskWorker` /
   `handle_task_entry`.
 - Multi-process web-server coordination.
+- Cheap sleep-only tasks whose only result is `"hello"`.
 
 ## Decisions
 
@@ -53,21 +56,36 @@ submissions call `task.enqueue(...)` or `await task.aenqueue(...)`.
 **Alternative:** enqueue via django-queues directly. Rejected: would not
 demonstrate this package.
 
-### Task catalogue: sync, async, immediate, delayed
+### Catalogue: pulse, summarise, probe
 
-Provide a small catalogue, for example:
+Three tasks, all doing work under `demo/var/` (or equivalent demo-local
+storage):
 
-- synchronous short task (CPU-trivial, returns a payload)
-- asynchronous short task (`async def`, awaited in the worker)
-- delayed variant (same work, `run_after` a few seconds in the future from
-  a dashboard control)
+1. **Pulse** (synchronous, self-rescheduling). Collect a local sample
+   (demo directory size, sample count, Redis ping latency, or similar),
+   append one JSON line to `demo/var/samples.jsonl`, then enqueue the next
+   run with `run_after` a few seconds in the future unless a stop flag is
+   set. Dashboard Start / Stop controls that flag (Redis key or demo file)
+   so the chain cannot run away. Each run is a new queue entry (generation
+   `pulse #n`), not one immortal row.
 
-Keep work cheap and deterministic (sleep/yield plus a JSON-normalizable
-result). Optional filesystem summaries from the old demo plan are allowed if
-they stay inside the demo directory; they are not required.
+2. **Summarise** (asynchronous one-shot). Read the sample file, compute a
+   small aggregate (count, min/max/mean of a numeric field), write
+   `demo/var/report.json`. Dashboard offers **Run now** and **Run in ~15s**
+   (`run_after`) so scheduled → due → running → artefact is visible.
+
+3. **Probe** (synchronous, backoff). A check that fails until a precondition
+   is met (for example, fewer than three samples). On failure it reschedules
+   itself with a longer `run_after` (2s, 4s, 8s, capped). Success writes a
+   short result and stops. Shows delay as a control, not just a wait.
 
 **Alternative:** faker injectors like `demo_pq`. Rejected: those enqueue
-queue entries, not Django tasks, and hide `run_after`.
+queue entries, not Django tasks, and hide `run_after`. **Alternative:**
+sleep-then-return-hello tasks. Rejected: they do not show why the backend
+exists.
+
+Self-reschedule is `task.using(run_after=...).enqueue()` at the end of a
+successful (or backoff) run. It is not a stored schedule.
 
 ### Observer is `queue_observer` over Redis `aobserve`
 
@@ -79,6 +97,22 @@ process-local projection and stream full snapshots over SSE, copying
 **Alternative:** poll `get_result` from the browser. Rejected: misses
 observer integration. **Alternative:** WebSockets. Rejected: extra stack for
 one-way lifecycle events.
+
+### Board: Scheduled / Done
+
+The page is a catalogue of controls plus a live board:
+
+- **Scheduled** — not yet terminal; deferred entries show remaining wait.
+- **Done** — terminal result, error, and artefact path when present.
+
+Ready and running are omitted. A local worker claims due work immediately and
+these catalogue tasks finish in milliseconds, so those states never persist
+long enough to paint. SSE snapshots drive the board; no full-page refresh.
+
+Also show the pulse generation chain (`#1 → #2 → #3 waiting`) and a short
+sparkline of recent sample values.
+
+Each Django task run remains one queue entry.
 
 ### ASGI dashboard, separate worker
 
@@ -92,9 +126,12 @@ localhost Redis port so this demo can sit beside `demo_aq` / `demo_pq`.
   bootstrap on subscribe; document single web process.
 - [Short `run_after` races Redis TIME vs wall clock] → Set delay from a
   clearly future offset (several seconds) and show remaining wait on the
-  dashboard.
-- [Users confuse this with `create-django-redis-tasks-demo`] → This change
-  supersedes it; archive the old change when implementing.
+  board.
+- [Pulse can run away if Stop is ignored] → Require an explicit stop flag
+  checked at the end of each pulse; Start is the only way to enqueue the
+  first generation.
+- [Probe backoff vs pulse both use `run_after`] → Label generations and
+  task names on the board so chains stay distinguishable.
 
 ## Migration Plan
 
@@ -104,5 +141,5 @@ localhost Redis port so this demo can sit beside `demo_aq` / `demo_pq`.
 
 ## Open Questions
 
-None. Demo port, exact catalogue copy, and card layout can be chosen at
-implementation without changing the spec.
+None. Exact sample fields, probe precondition, Redis port, and CSS can be
+chosen at implementation without changing the spec.

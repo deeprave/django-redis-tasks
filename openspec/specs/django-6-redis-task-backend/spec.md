@@ -17,9 +17,9 @@ The backend SHALL subclass `django.tasks.backends.base.BaseTaskBackend`, resolve
 - **WHEN** a task wrapping a coroutine function is enqueued
 - **THEN** the backend accepts it, since `supports_async_task` is `True`
 
-#### Scenario: Reject deferred tasks
+#### Scenario: Accept deferred tasks
 - **WHEN** a task is enqueued with `run_after` set
-- **THEN** the backend raises `InvalidTask` via the inherited `validate_task` check, since `supports_defer` is `False`
+- **THEN** the backend accepts it, since `supports_defer` is `True`
 
 #### Scenario: Enqueue priority tasks
 - **WHEN** a task is enqueued with a queue-dispatch priority other than the default
