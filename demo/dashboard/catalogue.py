@@ -6,6 +6,7 @@ import json
 import os
 import statistics
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ SAMPLES_NAME = "samples.jsonl"
 REPORT_NAME = "report.json"
 STOP_NAME = "pulse.stop"
 ACTIVE_NAME = "pulse.active"
+CHAIN_NAME = "pulse.chain"
 
 
 def samples_path() -> Path:
@@ -43,6 +45,10 @@ def stop_path() -> Path:
 
 def active_path() -> Path:
     return _var_dir() / ACTIVE_NAME
+
+
+def chain_path() -> Path:
+    return _var_dir() / CHAIN_NAME
 
 
 def ensure_var_dir() -> Path:
@@ -80,6 +86,20 @@ def clear_pulse_running() -> None:
     path = active_path()
     if path.is_file():
         path.unlink()
+
+
+def current_chain() -> str:
+    path = chain_path()
+    if not path.is_file():
+        return ""
+    return path.read_text(encoding="utf-8").strip()
+
+
+def begin_pulse_chain() -> str:
+    token = uuid.uuid4().hex
+    ensure_var_dir()
+    chain_path().write_text(token + "\n", encoding="utf-8")
+    return token
 
 
 def _dir_bytes() -> int:
@@ -122,17 +142,28 @@ def _atomic_write_text(path: Path, text: str) -> None:
         raise
 
 
-def run_pulse(*, generation: int = 1) -> dict[str, Any]:
+def run_pulse(*, generation: int = 1, chain: str = "") -> dict[str, Any]:
+    live = current_chain()
+    if chain and live and chain != live:
+        return {
+            "generation": generation,
+            "chain": chain,
+            "stale": True,
+            "reschedule": False,
+        }
     ensure_var_dir()
-    sample = {
+    sample: dict[str, Any] = {
         "generation": generation,
+        "chain": chain,
         "at": timezone.now().isoformat(),
         "dir_bytes": _dir_bytes(),
     }
     with samples_path().open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(sample) + "\n")
     sample["sample_count"] = len(_read_samples())
-    sample["reschedule"] = not pulse_stopped()
+    sample["reschedule"] = not pulse_stopped() and (
+        not chain or chain == current_chain()
+    )
     return sample
 
 

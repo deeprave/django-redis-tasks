@@ -35,9 +35,10 @@ def refresh(request: HttpRequest) -> HttpResponse:
 def pulse_start(request: HttpRequest) -> HttpResponse:
     if catalogue.pulse_running():
         return redirect("index")
+    chain = catalogue.begin_pulse_chain()
     catalogue.clear_pulse_stop()
     catalogue.mark_pulse_running()
-    pulse.enqueue(generation=1)
+    pulse.enqueue(generation=1, chain=chain)
     return redirect("index")
 
 

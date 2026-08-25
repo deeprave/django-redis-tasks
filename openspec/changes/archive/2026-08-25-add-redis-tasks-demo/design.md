@@ -69,8 +69,10 @@ storage):
    run with `run_after` a few seconds in the future unless a stop flag is
    set. Dashboard Start / Stop controls that flag (Redis key or demo file)
    so the chain cannot run away. Start is ignored while a chain is already
-   live; Stop is required before a new `generation=1`. Each run is a new
-   queue entry (generation `pulse #n`), not one immortal row.
+   live; Stop is required before a new `generation=1`. Each chain has an
+   identity token so a Start after Stop cannot revive a still-queued
+   generation from the previous chain. Each run is a new queue entry
+   (generation `pulse #n`), not one immortal row.
 
 2. **Summarise** (asynchronous one-shot). Read the sample file, compute a
    small aggregate (count, min/max/mean of a numeric field), write

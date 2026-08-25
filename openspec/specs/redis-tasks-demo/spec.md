@@ -1,11 +1,12 @@
-## Purpose
+# redis-tasks-demo
 
+## Purpose
 Give developers a small, runnable Django app that shows this package's Redis
 task backend on a live page: meaningful sync and async work, immediate and
 delayed `run_after`, self-rescheduling chains, and Redis queue observation
 without treating the unit tests as the only example.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Self-contained demo project
 
@@ -75,6 +76,12 @@ stop has been requested. Calendar schedules are out of scope.
 - **WHEN** a pulse chain is already running
 - **THEN** a further Start does not enqueue generation 1
 - **AND** Stop is required before a new chain
+
+#### Scenario: Pulse start after stop does not revive queued work
+- **WHEN** a user stops the pulse and then starts a new chain while a
+  previous generation is still scheduled
+- **THEN** that previous generation does not enqueue a successor
+- **AND** only the new chain reschedules
 
 #### Scenario: Probe backs off with run_after
 - **WHEN** the probe runs before its precondition is met and attempts

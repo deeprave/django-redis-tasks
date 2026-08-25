@@ -109,7 +109,19 @@
         }
         if (entry.result && typeof entry.result === "object") {
           if (entry.result.report) return entry.result.report;
-          if (entry.result.ok === false) return "retry in " + entry.result.retry_in + "s";
+          if (entry.result.ok === false) {
+            if (entry.result.retry_in != null) {
+              return "retry in " + entry.result.retry_in + "s";
+            }
+            return (
+              "gave up after try " +
+              entry.result.attempt +
+              " (" +
+              entry.result.samples +
+              " samples)"
+            );
+          }
+          if (entry.result.stale) return "stale chain";
           if (entry.result.sample_count != null) return entry.result.sample_count + " samples";
         }
         if (entry.error) return entry.error.type || "error";
@@ -130,8 +142,14 @@
           bar.style.height = Math.max(8, Math.round((size / max) * 40)) + "px";
           spark.append(bar);
         });
+        const liveChain = snapshot.pulse_chain;
         const pulses = snapshot.entries
-          .filter((entry) => entry.task === "pulse" && entry.generation != null)
+          .filter(
+            (entry) =>
+              entry.task === "pulse" &&
+              entry.generation != null &&
+              (!liveChain || entry.chain === liveChain)
+          )
           .sort((a, b) => a.generation - b.generation)
           .map((entry) => "#" + entry.generation);
         document.querySelector("#chain").textContent = pulses.length

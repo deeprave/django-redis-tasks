@@ -7,12 +7,12 @@ from dashboard import catalogue
 
 
 @task
-def pulse(*, generation: int = 1) -> dict:
-    result = catalogue.run_pulse(generation=generation)
+def pulse(*, generation: int = 1, chain: str = "") -> dict:
+    result = catalogue.run_pulse(generation=generation, chain=chain)
     if result["reschedule"]:
         pulse.using(
             run_after=timezone.now() + timedelta(seconds=catalogue.PULSE_DELAY_SECONDS)
-        ).enqueue(generation=generation + 1)
+        ).enqueue(generation=generation + 1, chain=chain)
     return {key: value for key, value in result.items() if key != "reschedule"}
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import threading
 from collections.abc import Iterator, Mapping
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from django.utils import timezone
@@ -37,7 +37,7 @@ def _parse_run_after(value: object) -> datetime | None:
     if parsed is None:
         return None
     if timezone.is_naive(parsed):
-        return timezone.make_aware(parsed, timezone.utc)
+        return timezone.make_aware(parsed, UTC)
     return parsed
 
 
@@ -102,6 +102,7 @@ class DashboardProjection:
             "task": _task_name(payload),
             "generation": kwargs.get("generation"),
             "attempt": kwargs.get("attempt"),
+            "chain": kwargs.get("chain"),
             "run_after": run_after.isoformat() if run_after else None,
             "remaining_wait": remaining_wait_seconds(run_after)
             if board_column(state) == "scheduled"
@@ -137,6 +138,7 @@ class DashboardProjection:
             "entries": rows,
             "samples": catalogue.recent_samples(),
             "pulse_stopped": catalogue.pulse_stopped(),
+            "pulse_chain": catalogue.current_chain(),
         }
 
     def events(self) -> Iterator[str]:
