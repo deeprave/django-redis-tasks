@@ -29,7 +29,7 @@ not sleep-only placeholders:
 - an asynchronous **summarise** task that reads those samples and writes a
   report artefact
 - a synchronous **probe** that retries with increasing `run_after` delays
-  until a precondition is met
+  until a precondition is met, at most three attempts
 
 Both pulse and summarise SHALL be enqueueable from the dashboard. Results
 SHALL include enough payload for the dashboard to show a sample, report
@@ -71,10 +71,22 @@ stop has been requested. Calendar schedules are out of scope.
 - **THEN** the in-flight generation may finish
 - **AND** no further pulse generation is enqueued
 
+#### Scenario: Pulse start while a chain is live
+- **WHEN** a pulse chain is already running
+- **THEN** a further Start does not enqueue generation 1
+- **AND** Stop is required before a new chain
+
 #### Scenario: Probe backs off with run_after
-- **WHEN** the probe runs before its precondition is met
-- **THEN** it fails or records a retry and enqueues itself with a longer
-  `run_after` than the previous attempt, up to a documented cap
+- **WHEN** the probe runs before its precondition is met and attempts
+  remain
+- **THEN** it records a retry and enqueues itself with a longer
+  `run_after` than the previous attempt, up to a documented delay cap
+  and at most three attempts
+
+#### Scenario: Probe stops after three attempts
+- **WHEN** the probe has run three times and the precondition is still
+  unmet
+- **THEN** it does not enqueue another attempt
 
 ### Requirement: Live board of queue lifecycle
 

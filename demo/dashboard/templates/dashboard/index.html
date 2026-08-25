@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>Redis Tasks Demo</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <style>
+      main { max-width: none; width: 100%; }
+      .dashboard-header {
+        align-items: center;
+        background: var(--pico-primary-background);
+        color: var(--pico-primary-inverse);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem;
+        padding: 1rem var(--pico-spacing);
+      }
+      .dashboard-header h1 { margin-bottom: 0; }
+      .layout {
+        display: grid;
+        gap: 1.5rem;
+        grid-template-columns: minmax(16rem, 22rem) 1fr;
+        padding: var(--pico-spacing);
+      }
+      .catalogue form { margin-bottom: 0.5rem; }
+      .board {
+        display: grid;
+        gap: 0.75rem;
+        grid-template-columns: minmax(16rem, 1fr) 2fr;
+      }
+      .column {
+        background: var(--pico-card-background-color);
+        border: 1px solid var(--pico-muted-border-color);
+        border-radius: 0.5rem;
+        min-height: 12rem;
+        padding: 0.75rem;
+      }
+      .column h3 { font-size: 0.95rem; margin-bottom: 0.75rem; text-transform: uppercase; }
+      .card {
+        border: 1px solid var(--pico-muted-border-color);
+        border-radius: 0.4rem;
+        font-size: 0.85rem;
+        margin-bottom: 0.5rem;
+        padding: 0.5rem 0.6rem;
+      }
+      .card .task { font-weight: 700; }
+      .sparkline { display: flex; align-items: flex-end; gap: 2px; height: 2.5rem; margin-top: 0.5rem; }
+      .sparkline span {
+        background: var(--pico-primary);
+        display: block;
+        flex: 1;
+        min-height: 2px;
+      }
+      .chain { font-family: var(--pico-font-family-monospace); font-size: 0.8rem; }
+      @media (max-width: 60rem) {
+        .layout, .board { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header class="dashboard-header">
+        <h1>Redis Tasks Demo</h1>
+        <form action="{% url 'refresh' %}" method="post">
+          <button type="submit">Refresh</button>
+        </form>
+      </header>
+      <div class="layout">
+        <aside class="catalogue">
+          <h2>Catalogue</h2>
+          <p>Pulse records a local sample every 8s until you stop it. Stop before starting a new chain. Summarise writes a report. Probe retries up to three times until three samples exist.</p>
+          <form action="{% url 'pulse-start' %}" method="post"><button type="submit">Start pulse</button></form>
+          <form action="{% url 'pulse-stop' %}" method="post"><button type="submit" class="secondary">Stop pulse</button></form>
+          <form action="{% url 'summarise-now' %}" method="post"><button type="submit">Summarise now</button></form>
+          <form action="{% url 'summarise-later' %}" method="post"><button type="submit">Summarise in 15s</button></form>
+          <form action="{% url 'probe-start' %}" method="post"><button type="submit">Start probe</button></form>
+          <p id="pulse-status"></p>
+          <div id="sparkline" class="sparkline" aria-label="Recent sample sizes"></div>
+          <p id="chain" class="chain"></p>
+        </aside>
+        <section>
+          <div class="board">
+            <div class="column" data-column="scheduled"><h3>Scheduled</h3><div class="cards"></div></div>
+            <div class="column" data-column="done"><h3>Done</h3><div class="cards"></div></div>
+          </div>
+        </section>
+      </div>
+    </main>
+    <script>
+      const columns = Object.fromEntries(
+        [...document.querySelectorAll(".column")].map((column) => [
+          column.dataset.column,
+          column.querySelector(".cards"),
+        ])
+      );
+
+      function label(entry) {
+        const parts = [entry.task];
+        if (entry.generation != null) parts.push("#" + entry.generation);
+        if (entry.attempt != null) parts.push("try " + entry.attempt);
+        return parts.join(" ");
+      }
+
+      function detail(entry) {
+        if (entry.column === "scheduled" && entry.remaining_wait > 0) {
+          return "due in " + Math.ceil(entry.remaining_wait) + "s";
+        }
+        if (entry.result && typeof entry.result === "object") {
+          if (entry.result.report) return entry.result.report;
+          if (entry.result.ok === false) return "retry in " + entry.result.retry_in + "s";
+          if (entry.result.sample_count != null) return entry.result.sample_count + " samples";
+        }
+        if (entry.error) return entry.error.type || "error";
+        return entry.state;
+      }
+
+      function render(snapshot) {
+        document.querySelector("#pulse-status").textContent = snapshot.pulse_stopped
+          ? "Pulse will stop after the in-flight generation."
+          : "Pulse stop flag is clear.";
+        const samples = snapshot.samples || [];
+        const spark = document.querySelector("#sparkline");
+        spark.replaceChildren();
+        const sizes = samples.map((sample) => sample.dir_bytes || 0);
+        const max = Math.max(1, ...sizes);
+        sizes.forEach((size) => {
+          const bar = document.createElement("span");
+          bar.style.height = Math.max(8, Math.round((size / max) * 40)) + "px";
+          spark.append(bar);
+        });
+        const pulses = snapshot.entries
+          .filter((entry) => entry.task === "pulse" && entry.generation != null)
+          .sort((a, b) => a.generation - b.generation)
+          .map((entry) => "#" + entry.generation);
+        document.querySelector("#chain").textContent = pulses.length
+          ? "Pulse chain: " + pulses.join(" → ")
+          : "";
+
+        Object.values(columns).forEach((node) => node.replaceChildren());
+        snapshot.entries.forEach((entry) => {
+          const host = columns[entry.column] || columns.done;
+          const card = document.createElement("article");
+          card.className = "card";
+          card.dataset.entryId = entry.id;
+          const title = document.createElement("div");
+          title.className = "task";
+          title.textContent = label(entry);
+          const meta = document.createElement("div");
+          meta.textContent = detail(entry);
+          card.append(title, meta);
+          host.append(card);
+        });
+      }
+
+      const stream = new EventSource("{% url 'events' %}");
+      stream.onmessage = ({ data }) => render(JSON.parse(data));
+      stream.onerror = (error) => console.error(error);
+    </script>
+  </body>
+</html>

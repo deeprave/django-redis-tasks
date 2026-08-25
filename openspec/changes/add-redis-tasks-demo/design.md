@@ -51,7 +51,9 @@ pollutes install metadata.
 
 Use `RedisAsyncPriorityQueueJson`, `TaskQueueEntry`, `RedisTaskWorker`,
 `handle_task_entry`, and `RedisBackend` with a `demo` alias. Dashboard
-submissions call `task.enqueue(...)` or `await task.aenqueue(...)`.
+submissions call `task.enqueue(...)`. Immediate async summarise may use
+`await task.aenqueue(...)`; delayed work uses `enqueue` under WSGI
+`runserver`.
 
 **Alternative:** enqueue via django-queues directly. Rejected: would not
 demonstrate this package.
@@ -66,18 +68,22 @@ storage):
    append one JSON line to `demo/var/samples.jsonl`, then enqueue the next
    run with `run_after` a few seconds in the future unless a stop flag is
    set. Dashboard Start / Stop controls that flag (Redis key or demo file)
-   so the chain cannot run away. Each run is a new queue entry (generation
-   `pulse #n`), not one immortal row.
+   so the chain cannot run away. Start is ignored while a chain is already
+   live; Stop is required before a new `generation=1`. Each run is a new
+   queue entry (generation `pulse #n`), not one immortal row.
 
 2. **Summarise** (asynchronous one-shot). Read the sample file, compute a
    small aggregate (count, min/max/mean of a numeric field), write
-   `demo/var/report.json`. Dashboard offers **Run now** and **Run in ~15s**
-   (`run_after`) so scheduled → due → running → artefact is visible.
+   `demo/var/report.json` with an atomic replace. Dashboard offers **Run
+   now** (`aenqueue`) and **Run in ~15s** (`enqueue` with `run_after`) so
+   scheduled wait then Done is visible. Delayed work uses `enqueue` because
+   stock Django `runserver` is WSGI.
 
 3. **Probe** (synchronous, backoff). A check that fails until a precondition
    is met (for example, fewer than three samples). On failure it reschedules
-   itself with a longer `run_after` (2s, 4s, 8s, capped). Success writes a
-   short result and stops. Shows delay as a control, not just a wait.
+   itself with a longer `run_after` (2s, 4s, 8s, capped) for at most three
+   attempts. Success writes a short result and stops. Shows delay as a
+   control, not just a wait.
 
 **Alternative:** faker injectors like `demo_pq`. Rejected: those enqueue
 queue entries, not Django tasks, and hide `run_after`. **Alternative:**
@@ -114,11 +120,14 @@ sparkline of recent sample values.
 
 Each Django task run remains one queue entry.
 
-### ASGI dashboard, separate worker
+### WSGI dashboard, separate worker
 
-Serve the dashboard with Django's ASGI `runserver` so an async submit path
-can use `aenqueue`. Run `runqueues` in another terminal. Document a unique
-localhost Redis port so this demo can sit beside `demo_aq` / `demo_pq`.
+Serve the dashboard with Django's stock WSGI `runserver`. An ASGI server
+would need extra dependencies this demo does not add. Delayed async tasks
+must use `enqueue()` on that path: `aenqueue(run_after=...)` from a
+WSGI-hosted async view was observed to dispatch immediately. Run
+`runqueues` in another terminal. Document a unique localhost Redis port so
+this demo can sit beside `demo_aq` / `demo_pq`.
 
 ## Risks / Trade-offs
 
@@ -128,8 +137,7 @@ localhost Redis port so this demo can sit beside `demo_aq` / `demo_pq`.
   clearly future offset (several seconds) and show remaining wait on the
   board.
 - [Pulse can run away if Stop is ignored] → Require an explicit stop flag
-  checked at the end of each pulse; Start is the only way to enqueue the
-  first generation.
+  checked at the end of each pulse; ignore Start while a chain is live.
 - [Probe backoff vs pulse both use `run_after`] → Label generations and
   task names on the board so chains stay distinguishable.
 

@@ -45,6 +45,13 @@ Queue aliases must match `[A-Za-z0-9_-]`. Redis keys from django-queues before 1
 uv add django-redis-tasks
 ```
 
+## Demo
+
+A localhost dashboard under [`demo/`](demo/README.md) shows the Redis backend
+live: pulse, summarise, and probe tasks, `run_after`, and a queue-observer
+board. Start Redis with Compose, then `runserver` and `runqueues` as
+documented there. It is not a production app.
+
 ## Configuration
 
 `django_queue` must be added to `INSTALLED_APPS`. `redis_tasks` does not require
