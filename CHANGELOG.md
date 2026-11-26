@@ -1,9 +1,10 @@
 # Changelog
 
-## Unreleased
+## v1.0.1 - 2026-11-26
 
 - Add a link to django.tasks documentation in the Usage section.
 - Dynamically pull and locally cache Django _current-version_ tests/tasks and run with the test suite against this implementation to ensure full interoperability.
+- Dependency updates
 
 ## v1.0.0 - 2026-08-24
 
