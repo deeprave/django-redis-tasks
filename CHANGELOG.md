@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.2 - 2026-11-28
+
+- Add Python 3.15 support.
+
 ## v1.0.1 - 2026-11-26
 
 - Add a link to django.tasks documentation in the Usage section.

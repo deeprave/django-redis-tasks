@@ -1,6 +1,6 @@
 [project]
 name = "django-redis-tasks"
-version = "1.0.1"
+version = "1.0.2"
 description = "Django tasks backend using Redis queues"
 readme = "README.md"
 license = "MIT"
@@ -13,6 +13,7 @@ classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Programming Language :: Python :: Implementation :: CPython",
     "Environment :: Web Environment",
     "Framework :: Django",
