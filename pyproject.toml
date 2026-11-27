@@ -1,6 +1,6 @@
 [project]
 name = "django-redis-tasks"
-version = "1.0.3"
+version = "1.0.4"
 description = "Django tasks backend using Redis queues"
 readme = "README.md"
 license = "MIT"
