@@ -40,8 +40,36 @@ jobs:
           fi
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
-  publish:
+  build:
     needs: release-commit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout validated release commit
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.release-commit.outputs.sha }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: latest
+
+      - name: Build package
+        shell: bash
+        run: uv build
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: distributions
+          path: dist/
+
+  publish:
+    needs: [release-commit, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -54,14 +82,11 @@ jobs:
           fetch-depth: 0
           ref: ${{ needs.release-commit.outputs.sha }}
 
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v9.0.0
+      - name: Download distributions
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
-          version: latest
-
-      - name: Build package
-        shell: bash
-        run: uv build
+          name: distributions
+          path: dist/
 
       - name: Read release version
         id: release
