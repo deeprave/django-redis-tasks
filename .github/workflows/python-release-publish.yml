@@ -3,34 +3,59 @@ name: Build and Publish Python Package
 on:
   workflow_dispatch:
 
-env:
-  TARGET_PYTHON_VERSION: "3.14"
-
 jobs:
-  checks:
+  release-commit:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      id-token: write
-    strategy:
-      matrix:
-        python-version: ["3.14"]
+      actions: read
+      contents: read
+    outputs:
+      sha: ${{ steps.release-commit.outputs.sha }}
 
     steps:
       - name: Checkout main
         uses: actions/checkout@v7.0.1
         with:
-          fetch-depth: 0
           ref: main
 
-      - name: Test and Build
-        uses: ./.github/actions/test-and-build
+      - name: Find validated release commit
+        id: release-commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          sha=$(git rev-parse HEAD)
+          read -r conclusion run_sha < <(
+            gh run list \
+              --workflow python-test-and-build.yml \
+              --branch main \
+              --commit "$sha" \
+              --limit 1 \
+              --json conclusion,headSha \
+              --jq '.[0] | "\(.conclusion // \"\") \(.headSha // \"\")"'
+          )
+          if [[ "$conclusion" != "success" || "$run_sha" != "$sha" ]]; then
+            echo "No successful Test and Build CI run exists for $sha." >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: release-commit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - name: Checkout validated release commit
+        uses: actions/checkout@v7.0.1
         with:
-          python-version: ${{ matrix.python-version }}
+          fetch-depth: 0
+          ref: ${{ needs.release-commit.outputs.sha }}
 
       - name: Read release version
         id: release
-        if: ${{ matrix.python-version == env.TARGET_PYTHON_VERSION }}
         shell: bash
         run: |
           version=$(python -c "import tomllib; from pathlib import Path; print(tomllib.loads(Path('pyproject.toml').read_text())['project']['version'])")
@@ -38,7 +63,6 @@ jobs:
           echo "tag=v${version}" >> "$GITHUB_OUTPUT"
 
       - name: Create release tag
-        if: ${{ matrix.python-version == env.TARGET_PYTHON_VERSION }}
         env:
           TAG: ${{ steps.release.outputs.tag }}
         shell: bash
@@ -58,12 +82,10 @@ jobs:
           git push origin "refs/tags/$TAG"
 
       - name: Publish package
-        if: ${{ matrix.python-version == env.TARGET_PYTHON_VERSION }}
         shell: bash
         run: uv publish
 
       - name: Create GitHub release
-        if: ${{ matrix.python-version == env.TARGET_PYTHON_VERSION }}
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
