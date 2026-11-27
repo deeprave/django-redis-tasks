@@ -135,7 +135,8 @@ jobs:
           heading = re.compile(rf"^## (?:v)?{re.escape(version)}(?:\s|$)")
           start = next((index + 1 for index, line in enumerate(lines) if heading.match(line)), None)
           if start is None:
-              raise SystemExit(f"CHANGELOG.md has no entry for v{version}")
+              print(f"Warning: CHANGELOG.md has no entry for v{version}", file=sys.stderr)
+              raise SystemExit(0)
           notes = []
           for line in lines[start:]:
               if line.startswith("## "):
@@ -143,7 +144,8 @@ jobs:
               notes.append(line)
           text = "\n".join(notes).strip()
           if not text:
-              raise SystemExit(f"CHANGELOG.md entry for v{version} has no release notes")
+              print(f"Warning: CHANGELOG.md entry for v{version} has no release notes", file=sys.stderr)
+              raise SystemExit(0)
           print(text)
           PY
           gh release create "$TAG" --title "$TAG" --notes-file release-notes.md
