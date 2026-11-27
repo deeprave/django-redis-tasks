@@ -32,7 +32,7 @@ jobs:
               --commit "$sha" \
               --limit 1 \
               --json conclusion,headSha \
-              --jq '.[0] | "\(.conclusion // \"\") \(.headSha // \"\")"'
+              --jq '.[0] | "\(.conclusion // "") \(.headSha // "")"'
           )
           if [[ "$conclusion" != "success" || "$run_sha" != "$sha" ]]; then
             echo "No successful Test and Build CI run exists for $sha." >&2
